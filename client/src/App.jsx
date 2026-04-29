@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Sidebar, Icons, useTheme } from '../ui-kit';
 import { api } from './lib/api';
-import Loops    from './views/Loops.jsx';
+import Loops from './views/Loops.jsx';
 import Entities from './views/Entities.jsx';
-import Summary  from './views/Summary.jsx';
+import Summary from './views/Summary.jsx';
+import NLSearch from './views/NLSearch.jsx';
 
 const NAV = [
   { type: 'section', id: 'analysis', label: 'Analysis' },
-  { id: 'loops',    label: 'Funding Loops', icon: Icons.arrow },
-  { id: 'summary',  label: 'Findings',      icon: Icons.overview, accent: '#A855F7' },
+  { id: 'loops', label: 'Funding Loops', icon: Icons.arrow },
+  { id: 'summary', label: 'Findings', icon: Icons.overview, accent: '#A855F7' },
   { type: 'section', id: 'entities-sec', label: 'Public Funds' },
   { id: 'entities', label: 'Top Recipients', icon: Icons.building, accent: '#06B6D4' },
+  { type: 'section', id: 'search-sec', label: 'Search' },
+  { id: 'nl-search', label: 'AI Search', icon: Icons.search, accent: '#6366F1' },
 ];
 
 export default function App() {
@@ -43,10 +46,11 @@ export default function App() {
         loadingTabs={{ loops: memoLoading }}
         footer={<HealthFooter health={health} />}
       />
-      <main className="flex-1 px-8 py-7 overflow-y-auto">
-        {active === 'loops'    ? <Loops />    : null}
+      <main style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
+        {active === 'loops' ? <Loops /> : null}
         {active === 'entities' ? <Entities /> : null}
-        {active === 'summary'  ? <Summary />  : null}
+        {active === 'summary' ? <Summary /> : null}
+        {active === 'nl-search' ? <NLSearch /> : null}
       </main>
     </div>
   );

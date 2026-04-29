@@ -1841,6 +1841,172 @@ app.get('/api/recipient/:name', async (req, res) => {
 });
 
 // ============================================================
+// POST /api/nl-search — Natural-language → SQL → AI summary
+// ============================================================
+const NL_SCHEMA = `
+You have access to a PostgreSQL database with the following read-only tables and views.
+All monetary values are in CAD. Business numbers (bn) are 9-digit strings identifying Canadian charities.
+
+SCHEMA:
+
+cra.vw_charity_profiles
+  bn TEXT, legal_name TEXT, city TEXT, province TEXT, category_name TEXT, fiscal_year INT
+
+cra.overhead_by_charity
+  bn TEXT, fiscal_year INT, revenue NUMERIC, strict_overhead_pct NUMERIC
+
+cra.govt_funding_by_charity
+  bn TEXT, fiscal_year INT, federal NUMERIC, provincial NUMERIC, govt_share_of_rev NUMERIC
+
+cra.loop_charity_financials
+  bn TEXT, designation TEXT (A=Public Foundation, B=Private Foundation, C=Charitable Organization),
+  category TEXT, program_spending NUMERIC, gifts_given_donees NUMERIC,
+  compensation_spending NUMERIC, admin_spending NUMERIC, fundraising_spending NUMERIC,
+  total_expenditures NUMERIC, revenue NUMERIC
+
+cra.loop_classification
+  bn TEXT, classification TEXT (one of: structural, overhead_extraction, receipt_generation, revenue_inflation, low_risk),
+  total_score NUMERIC (0-30 risk score), overhead_pct NUMERIC, program_pct NUMERIC, designation TEXT
+
+cra.partitioned_cycles  (detected circular funding loops)
+  id INT, hops INT, total_flow NUMERIC, bottleneck_amt NUMERIC,
+  path_display TEXT, min_year INT, max_year INT, tier TEXT
+
+cra.cra_directors
+  bn TEXT, director_name TEXT
+
+fed.grants_contributions  (federal grants & contributions)
+  bn TEXT, owner_org TEXT, owner_org_title TEXT,
+  recipient_name TEXT, recipient_city TEXT, recipient_province TEXT, recipient_type TEXT,
+  agreement_value NUMERIC, agreement_title_en TEXT, prog_name_en TEXT,
+  agreement_start_date DATE, agreement_end_date DATE, is_amendment BOOLEAN
+
+ab.ab_grants  (Alberta grants)
+  ministry TEXT, program TEXT, amount NUMERIC, fiscal_year TEXT, recipient_name TEXT
+
+ab.ab_contracts  (Alberta contracts)
+  ministry TEXT, amount NUMERIC, fiscal_year TEXT, recipient_name TEXT
+
+ab.ab_sole_source  (Alberta sole-source awards)
+  ministry TEXT, contract_value NUMERIC, contract_description TEXT, contract_date DATE, recipient_name TEXT
+
+general.entity_golden_records  (canonical cross-dataset entities)
+  canonical_name TEXT, bn TEXT, in_fed BOOLEAN, in_ab BOOLEAN,
+  aliases TEXT[], dataset_sources TEXT[]
+
+JOINS: Use bn to join cra tables together and to fed.grants_contributions.
+Use legal_name / recipient_name for cross-schema name matching.
+For most recent data per charity, use DISTINCT ON (bn) ORDER BY bn, fiscal_year DESC.
+`.trim();
+
+const BLOCKED_PATTERNS = /\b(insert|update|delete|drop|create|alter|truncate|copy|pg_read_file|pg_ls_dir|pg_exec|dblink)\b/i;
+
+function safeguardSQL(sql) {
+  const trimmed = sql.trim().replace(/^```sql\s*/i, '').replace(/```\s*$/, '').trim();
+  if (!/^select\b/i.test(trimmed)) {
+    throw new Error('Only SELECT queries are allowed.');
+  }
+  if (BLOCKED_PATTERNS.test(trimmed)) {
+    throw new Error('Query contains disallowed operations.');
+  }
+  // Prevent stacked queries
+  if (/;\s*\S/.test(trimmed)) {
+    throw new Error('Multiple statements are not allowed.');
+  }
+  // Enforce result cap
+  if (!/\blimit\b/i.test(trimmed)) {
+    return trimmed.replace(/;?\s*$/, '') + '\nLIMIT 100';
+  }
+  return trimmed;
+}
+
+app.post('/api/nl-search', async (req, res) => {
+  const { query } = req.body || {};
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  if (query.length > 500) {
+    return res.status(400).json({ error: 'query too long (max 500 chars)' });
+  }
+
+  // Step 1: NL → SQL
+  let rawSql;
+  try {
+    const sqlPrompt = `${NL_SCHEMA}
+
+USER QUESTION: "${query.trim()}"
+
+Return ONLY a valid PostgreSQL SELECT statement that answers the question.
+- No markdown, no explanation, no code fences.
+- Always include LIMIT 100 or fewer.
+- Use aliases for readability (e.g. AS "Charity Name").
+- Format currency columns with TO_CHAR(col, 'FM$999,999,999') where helpful.
+- If the question is ambiguous, use the most recent fiscal_year available.
+- Prefer joining cra.vw_charity_profiles to get legal_name for charity BNs.`;
+
+    const sqlResp = await geminiCall({
+      model: GEMINI_MODEL,
+      contents: sqlPrompt,
+    }, 'nl-search:sql');
+
+    rawSql = sqlResp.text?.trim() || '';
+  } catch (err) {
+    console.error('[nl-search] SQL generation failed:', err.message);
+    return res.status(500).json({ error: 'AI could not generate a query. Please try rephrasing.' });
+  }
+
+  // Step 2: Validate + sanitize SQL
+  let safeSQL;
+  try {
+    safeSQL = safeguardSQL(rawSql);
+  } catch (err) {
+    console.warn('[nl-search] SQL rejected:', err.message, '| raw:', rawSql.slice(0, 200));
+    return res.status(422).json({ error: `Generated query was invalid: ${err.message}` });
+  }
+
+  // Step 3: Execute
+  let rows, columns;
+  try {
+    const result = await pool.query(safeSQL);
+    rows = result.rows;
+    columns = result.fields.map(f => f.name);
+  } catch (err) {
+    console.error('[nl-search] Query execution failed:', err.message);
+    return res.status(422).json({
+      error: 'The generated query had a database error. Try rephrasing your question.',
+      sql: safeSQL,
+      db_error: err.message,
+    });
+  }
+
+  // Step 4: AI summary of results
+  let summary = '';
+  try {
+    const rowSample = rows.slice(0, 30);
+    const summaryPrompt = `A user asked: "${query.trim()}"
+
+The database returned ${rows.length} result(s). Here is a sample (up to 30 rows):
+${JSON.stringify(rowSample, null, 2)}
+
+Write 2-3 sentences in plain English summarizing what the data shows.
+Be specific: mention numbers, names, totals, trends. No bullet points. No markdown.
+Write for a non-technical audience investigating Canadian government accountability.`;
+
+    const sumResp = await geminiCall({
+      model: GEMINI_MODEL,
+      contents: summaryPrompt,
+    }, 'nl-search:summary');
+
+    summary = sumResp.text?.trim() || '';
+  } catch (err) {
+    console.warn('[nl-search] Summary generation failed:', err.message);
+    summary = `Found ${rows.length} result(s) matching your query.`;
+  }
+
+  res.json({ sql: safeSQL, columns, rows, rowCount: rows.length, summary });
+});
+
+// ============================================================
 // GET /api/health — System health (db + matview + memo + golden)
 // ============================================================
 app.get('/api/health', async (req, res) => {
