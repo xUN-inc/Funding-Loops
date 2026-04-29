@@ -50,8 +50,9 @@ app.get('/METHODOLOGY.md', (req, res) => {
 });
 
 // --- Caches ---
-const memoCache = new Map();   // id -> { memo, verdict, loopId, generated_at }
-let cachedLoops = [];          // top 20 loops loaded at startup
+const memoCache = new Map();       // id -> { memo, verdict, loopId, generated_at }
+const directorCache = new Map();   // UPPER("First Last") -> profile result
+let cachedLoops = [];              // top 20 loops loaded at startup
 let pregenProgress = { done: 0, total: 0 };
 const startTime = Date.now();
 
@@ -412,6 +413,40 @@ async function getDirectorOverlap(bns) {
 }
 
 // ============================================================
+// Helper: every charity board this director appears on across
+// the entire CRA dataset (not just the loop the user is viewing).
+// Matches by the same UPPER("first last") form used elsewhere so
+// the input from the UI cards drops in directly.
+// ============================================================
+async function getDirectorBoards(directorName) {
+  const norm = String(directorName || '').trim().toUpperCase();
+  if (!norm) return [];
+  try {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (d.bn)
+        d.bn,
+        d.position,
+        d.start_date,
+        d.end_date,
+        d.at_arms_length,
+        d.fpe,
+        vp.legal_name,
+        vp.city,
+        vp.province,
+        vp.category_name
+      FROM cra.cra_directors d
+      LEFT JOIN cra.vw_charity_profiles vp ON vp.bn = d.bn
+      WHERE UPPER(TRIM(COALESCE(d.first_name, '') || ' ' || COALESCE(d.last_name, ''))) = $1
+      ORDER BY d.bn, d.fpe DESC
+    `, [norm]);
+    return rows;
+  } catch (err) {
+    console.error('getDirectorBoards error:', err.message);
+    return [];
+  }
+}
+
+// ============================================================
 // Helper: golden-records enrichment — cross-dataset context
 // Returns map: bn -> { dataset_sources, aliases, related_count }
 // Tri-state probe so the app degrades gracefully without general schema.
@@ -700,25 +735,44 @@ async function generateMemo(loopId) {
     controlling_directors: directorContext,
   };
 
-  const prompt = `You are a forensic accountant reviewing Canadian charity funding patterns for a government accountability investigation. Analyze this circular funding loop in exactly 3 paragraphs of plain prose.
+  const prompt = `You are a forensic accountant reviewing a circular charity funding pattern for a Canadian government accountability investigation. Produce a tight bulleted signal list — NOT prose.
 
-OUTPUT RULES (strict):
-- Plain text only. No salutation ("Dear", "To whom it may concern"), no signature, no sender/recipient block, no date line, no "Subject:" or "Re:" header, no "Sincerely" / "Regards".
-- No markdown. No bullet points. No headings. No bold or italics. No "Paragraph 1:" labels.
-- Just three paragraphs separated by a blank line, then the verdict tag on its own line.
+OUTPUT FORMAT (strict):
+- Each line is one bullet starting with "- ".
+- Every bullet has TWO parts separated by " | Source: ":
+  - The SIGNAL: a 12-25 word clause naming the red flag, structural exemption, or absence of concern. Lead with the strongest evidence first.
+  - The SOURCE: which database table/column or computed metric produced this evidence. Use the canonical names from the DATA SOURCES list below.
+- 4 to 8 bullets total. Stop when you run out of meaningful signals — do not pad.
+- No salutation, no headers, no paragraphs, no closing remarks, no "Sincerely". No markdown bold/italic, no nested bullets.
+- After the bullets, leave one blank line, then the verdict tag on its own line.
 
-Paragraph 1: What these organizations are and what they claim to do. If a charity has a classification label, NAME it (e.g. "X is classified as overhead extraction") and explain what that bucket means in one short clause.
+DATA SOURCES you may cite (use these exact names):
+- cra.loop_classification — bucket labels (overhead_extraction, receipt_generation, revenue_inflation, structural, low_risk), risk_score 0-30, overhead_pct, program_pct
+- cra.loop_charity_financials — program_spending, gifts_given_donees, compensation_spending, admin_spending, fundraising_spending, revenue, designation
+- cra.overhead_by_charity / cra.govt_funding_by_charity — total_revenue, federal_government_revenue, provincial_government_revenue, strict_overhead_pct
+- cra.cra_directors — last_name + first_name match across loop BNs (controlling-director signal)
+- fed.grants_contributions — agreement_value, owner_org, agreement_title (federal grant entering the loop)
+- general.entity_golden_records — aliases, dataset_sources (cross-dataset / renamed-shell signal)
+- cra.partitioned_cycles — hops, total_flow, bottleneck_amt, year_range
+- computed: leakage_pct (loop-level), data_coverage (fraction of BNs with financial data)
 
-Paragraph 2: What is financially suspicious or normal about this loop — consider government funding dependency, overhead ratios, whether the flow amounts are proportionate to org size, and whether the same money appears to be counted multiple times. The leakage model treats both own-program spending AND gifts to other qualified donees as "useful" disbursement (because foundations legitimately distribute via grants, not their own programs). Use leakage as primary evidence when leakage_pct exceeds 60%. If most members are foundations (designation A or B) and leakage_pct is low, do NOT call that suspicious — that is the structurally expected pattern for endowment/grant-making networks. If controlling_directors is non-empty, NAME the individual(s) and state how many of these charities they sit on. A single person on multiple boards inside one cycle is the strongest possible signal that the cycle is operated by one decision-maker.
+INTERPRETATION RULES:
+- Treat leakage_pct >= 60% as a primary red flag. Below 40% is fine.
+- If most members are designation A or B (foundations) and leakage is low, that is structurally expected — call it out as a benign signal, not a concern.
+- A single named individual sitting on 2+ boards inside the cycle is the strongest single signal. Always include such a bullet by name when controlling_directors is non-empty.
+- Federal grant dollars entering a high-leakage loop is materially worse than private donations cycling. Call this out explicitly.
+- When a charity is classified \`structural\`, mark it as a benign-by-design signal, not a red flag.
 
-Paragraph 3: A verdict — is this loop LIKELY BENIGN (normal federated structure), REQUIRES SCRUTINY (unusual but possibly explainable), or RED FLAG (pattern consistent with revenue inflation, receipt generation, or overhead extraction). Explain your verdict in plain English a journalist could quote. Cite specific classification labels and director names where they exist.
-
-If federal grants exist for organizations in this loop, factor this into your analysis. Government money entering a circular funding loop is significantly more concerning than purely private donations cycling. Note specifically if grant money appears to enter the loop and then circulate without clear programmatic output.
-
-End your response with exactly one of these tags on its own line:
+VERDICT TAG (last line, exactly one of):
 [VERDICT: LIKELY BENIGN]
 [VERDICT: REQUIRES SCRUTINY]
 [VERDICT: RED FLAG]
+
+EXAMPLES of well-formed bullets (do not copy verbatim — generate from the data):
+- Loop leakage 87% — most of one bottleneck dollar is absorbed by compensation and admin, not programs | Source: cra.loop_charity_financials (compensation_spending + admin_spending vs program_spending)
+- Walter Berlin sits on 3 of 4 boards in the cycle, including the highest-flow node | Source: cra.cra_directors (shared last_name + first_name across loop BNs)
+- $4.2M federal grant from Employment and Social Development Canada flows into the highest-leakage participant | Source: fed.grants_contributions (agreement_value, owner_org)
+- All 4 charities are designation B private foundations with overhead under 15% — endowment grant cycle, structurally expected | Source: cra.loop_classification (designation, classification=structural)
 
 Data: ${JSON.stringify(loopData, null, 2)}`;
 
@@ -1026,6 +1080,150 @@ app.post('/api/investigate/:id', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('POST /api/investigate/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// Shared logic: build a public-record profile of a charity
+// director by combining everything we know from cra.cra_directors
+// with Google Search-grounded research from Gemini.
+// ============================================================
+async function generateDirectorProfile({ directorName, charityBn }) {
+  const norm = String(directorName || '').trim().toUpperCase();
+  if (!norm) throw new Error('director_name is required');
+
+  if (directorCache.has(norm)) {
+    return { ...directorCache.get(norm), cached: true };
+  }
+
+  // Pull every CRA board this person sits on. The seed BN (where
+  // the user clicked from) is used as conversational anchor in the
+  // prompt; all other boards become "what they're a part of" data.
+  const boards = await getDirectorBoards(norm);
+  const seed = charityBn ? boards.find(b => b.bn === charityBn) : null;
+
+  const boardsBullet = boards.length
+    ? boards
+        .map(b => {
+          const name = b.legal_name || b.bn;
+          const pos = b.position || 'director';
+          const where = [b.city, b.province].filter(Boolean).join(', ');
+          const start = b.start_date ? new Date(b.start_date).toISOString().slice(0, 10) : null;
+          const end = b.end_date ? new Date(b.end_date).toISOString().slice(0, 10) : null;
+          const range = start ? ` (${start}${end ? ` → ${end}` : ' → present'})` : '';
+          const arms = b.at_arms_length === false ? ' [non-arm\'s-length]' : '';
+          return `  - ${name} (BN ${b.bn}) — ${pos}${arms}${where ? `, ${where}` : ''}${range}`;
+        })
+        .join('\n')
+    : '  - (no charity boards found in cra.cra_directors for this exact name)';
+
+  const prompt = `You are a research analyst preparing a public-record profile of a Canadian charity director for an accountability investigation. The reader is a journalist or auditor who needs verifiable facts, not speculation.
+
+Director (as listed in CRA T3010 filings): ${norm}
+${seed ? `Profile opened from: ${seed.legal_name || seed.bn} (BN ${seed.bn}) — position: ${seed.position || 'director'}` : ''}
+
+CHARITY BOARDS THIS PERSON IS ON (from cra.cra_directors, all years):
+${boardsBullet}
+
+Use Google Search to find publicly available, verifiable information about this person beyond the CRA data above. Restrict to public sources: corporate registries, official announcements, news articles, professional bios, regulatory filings.
+
+OUTPUT FORMAT (strict):
+- Bulleted list, 4-10 bullets total. No prose paragraphs, no preamble, no salutation.
+- Each bullet has THREE parts in this exact form:
+    - [CATEGORY] [12-30 word factual claim] | Source: [URL or "CRA T3010 (cra.cra_directors)"]
+- CATEGORY is one of: PART OF, ACCESS, OTHER WORK, CONTEXT, AMBIGUITY.
+- Every bullet MUST cite a source. If you cannot find a public source, do not make the claim.
+- For claims sourced from the board list above, cite "CRA T3010 (cra.cra_directors)".
+- If the name is common and you cannot confidently disambiguate, lead with an AMBIGUITY bullet flagging that.
+
+CATEGORY DEFINITIONS:
+- PART OF: other boards, professional associations, networks, family-of-companies relationships.
+- ACCESS: fiduciary, financial, or operational access these positions confer (e.g. signing authority on a $X charity, access to donor lists, control over grant disbursement).
+- OTHER WORK: current or recent employment, profession, ownership stakes in companies.
+- CONTEXT: relevant prior positions, public reputation signals, regulatory or legal history if any (cite the regulator/court source).
+- AMBIGUITY: name-collision warnings or limits of what could be verified.
+
+RULES:
+- Lead with the strongest evidence first (typically PART OF based on the CRA board list).
+- No speculation, no inference about wrongdoing. State facts only and let the reader judge.
+- Do not duplicate bullets — each bullet should add new information.
+- If almost nothing is publicly findable beyond the CRA data, that's fine — emit fewer bullets and end with [PROFILE: PARTIAL — limited public info].
+
+End with exactly ONE of these tags on its own line:
+[PROFILE: COMPLETE]
+[PROFILE: PARTIAL — limited public info]
+[PROFILE: AMBIGUOUS — name collision unresolved]`;
+
+  let profileText = '';
+  let sources = [];
+  let groundingQueries = [];
+
+  try {
+    const response = await geminiCall({
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] },
+    }, `director:${norm}`);
+
+    profileText = response.text || '';
+
+    // Extract grounding citations (Google Search-attributed sources).
+    const grounding = response.candidates?.[0]?.groundingMetadata || {};
+    sources = (grounding.groundingChunks || [])
+      .map(c => (c.web ? { uri: c.web.uri, title: c.web.title || c.web.uri } : null))
+      .filter(Boolean);
+    groundingQueries = grounding.webSearchQueries || [];
+  } catch (err) {
+    console.error(`Director profile failed for "${norm}":`, err.message);
+    profileText = '- [CONTEXT] Profile generation unavailable — please retry. | Source: n/a\n\n[PROFILE: PARTIAL — limited public info]';
+  }
+
+  const result = {
+    director_name: norm,
+    seed_bn: charityBn || null,
+    seed_charity: seed?.legal_name || null,
+    cra_boards: boards.map(b => ({
+      bn: b.bn,
+      legal_name: b.legal_name,
+      position: b.position,
+      city: b.city,
+      province: b.province,
+      category_name: b.category_name,
+      at_arms_length: b.at_arms_length,
+      start_date: b.start_date,
+      end_date: b.end_date,
+    })),
+    boards_count: boards.length,
+    profile: profileText,
+    sources,
+    search_queries: groundingQueries,
+    generated_at: new Date().toISOString(),
+    cached: false,
+  };
+
+  directorCache.set(norm, result);
+  return result;
+}
+
+// ============================================================
+// POST /api/director-profile — AI-grounded director research
+// Body: { director_name: "WALTER BERLIN", charity_bn?: "..." }
+// charity_bn is optional context (where the click came from).
+// ============================================================
+app.post('/api/director-profile', async (req, res) => {
+  try {
+    const { director_name, charity_bn } = req.body || {};
+    if (!director_name) {
+      return res.status(400).json({ error: 'director_name is required' });
+    }
+    const result = await generateDirectorProfile({
+      directorName: director_name,
+      charityBn: charity_bn,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('POST /api/director-profile error:', err);
     res.status(500).json({ error: err.message });
   }
 });
