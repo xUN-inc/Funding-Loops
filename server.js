@@ -738,7 +738,7 @@ async function generateMemo(loopId) {
     bottleneck_amt: loop.bottleneck_amt,
     year_range: `${loop.min_year}-${loop.max_year}`,
     hops: loop.hops,
-    worst_classification: CLASSIFICATION_LABEL[worstClassification(classMap, bns)] || 'Low Risk',
+    worst_classification: CLASSIFICATION_LABEL[worstClassification(classMap, bns)] || 'Stupid',
     organizations: orgData,
     leakage: {
       bottleneck_input_fmt: leakage.bottleneck_input_fmt,
@@ -1308,7 +1308,7 @@ async function getSummary() {
 }
 
 async function buildSummary() {
-    const { rows: allLoops } = await pool.query(`
+  const { rows: allLoops } = await pool.query(`
       SELECT id, hops, total_flow, bottleneck_amt, path_display, min_year, max_year, tier
       FROM cra.partitioned_cycles
       WHERE total_flow > 100000
@@ -1317,170 +1317,170 @@ async function buildSummary() {
       LIMIT 200
     `);
 
-    const filtered = allLoops.filter(l => !isFederatedTransfer(parseBNs(l.path_display)));
-    const allBNs = [...new Set(filtered.flatMap(l => parseBNs(l.path_display)))];
-    const [profiles, classMap] = await Promise.all([
-      resolveProfiles(allBNs),
-      getClassifications(allBNs),
-    ]);
-    const nameMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
+  const filtered = allLoops.filter(l => !isFederatedTransfer(parseBNs(l.path_display)));
+  const allBNs = [...new Set(filtered.flatMap(l => parseBNs(l.path_display)))];
+  const [profiles, classMap] = await Promise.all([
+    resolveProfiles(allBNs),
+    getClassifications(allBNs),
+  ]);
+  const nameMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
 
-    // Group loops by worst classification
-    const buckets = {
-      overhead_extraction: [],
-      receipt_generation: [],
-      revenue_inflation: [],
-      structural: [],
-      low_risk: [],
+  // Group loops by worst classification
+  const buckets = {
+    overhead_extraction: [],
+    receipt_generation: [],
+    revenue_inflation: [],
+    structural: [],
+    low_risk: [],
+  };
+
+  // Distributions
+  const tierDist = new Map();   // tier -> { count, flow }
+  const hopDist = new Map();   // hops -> { count, flow }
+  const yearDist = new Map();   // year -> { active_loops, flow_share }
+
+  const enrichedLoops = [];
+  let bnTouchCount = 0;
+  let multiBnLoops = 0;
+
+  for (const l of filtered) {
+    const bns = parseBNs(l.path_display);
+    const uniqBns = [...new Set(bns)];
+    bnTouchCount += uniqBns.length;
+    if (uniqBns.length >= 4) multiBnLoops++;
+
+    const worst = worstClassification(classMap, bns);
+    const names = bns.map(bn => nameMap[bn]?.legal_name || bn);
+    const shortLabel = names.length <= 2
+      ? names.join(' → ')
+      : `${names[0]} → ... → ${names[names.length - 1]}`;
+    const flow = Number(l.total_flow);
+    const enriched = {
+      id: l.id,
+      total_flow: flow,
+      total_flow_fmt: formatCurrency(flow),
+      bottleneck_amt: l.bottleneck_amt != null ? Number(l.bottleneck_amt) : null,
+      hops: l.hops,
+      unique_orgs: uniqBns.length,
+      short_label: shortLabel,
+      year_range: `${l.min_year}–${l.max_year}`,
+      min_year: l.min_year,
+      max_year: l.max_year,
+      tier: l.tier,
+      worst,
+      worst_label: CLASSIFICATION_LABEL[worst] || 'Low Risk',
     };
+    enrichedLoops.push(enriched);
+    buckets[worst].push(enriched);
 
-    // Distributions
-    const tierDist = new Map();   // tier -> { count, flow }
-    const hopDist = new Map();   // hops -> { count, flow }
-    const yearDist = new Map();   // year -> { active_loops, flow_share }
+    const tierKey = l.tier || 'untiered';
+    const t = tierDist.get(tierKey) || { count: 0, flow: 0 };
+    t.count += 1; t.flow += flow;
+    tierDist.set(tierKey, t);
 
-    const enrichedLoops = [];
-    let bnTouchCount = 0;
-    let multiBnLoops = 0;
+    const hopKey = String(l.hops);
+    const h = hopDist.get(hopKey) || { count: 0, flow: 0 };
+    h.count += 1; h.flow += flow;
+    hopDist.set(hopKey, h);
 
-    for (const l of filtered) {
-      const bns = parseBNs(l.path_display);
-      const uniqBns = [...new Set(bns)];
-      bnTouchCount += uniqBns.length;
-      if (uniqBns.length >= 4) multiBnLoops++;
-
-      const worst = worstClassification(classMap, bns);
-      const names = bns.map(bn => nameMap[bn]?.legal_name || bn);
-      const shortLabel = names.length <= 2
-        ? names.join(' → ')
-        : `${names[0]} → ... → ${names[names.length - 1]}`;
-      const flow = Number(l.total_flow);
-      const enriched = {
-        id: l.id,
-        total_flow: flow,
-        total_flow_fmt: formatCurrency(flow),
-        bottleneck_amt: l.bottleneck_amt != null ? Number(l.bottleneck_amt) : null,
-        hops: l.hops,
-        unique_orgs: uniqBns.length,
-        short_label: shortLabel,
-        year_range: `${l.min_year}–${l.max_year}`,
-        min_year: l.min_year,
-        max_year: l.max_year,
-        tier: l.tier,
-        worst,
-        worst_label: CLASSIFICATION_LABEL[worst] || 'Low Risk',
-      };
-      enrichedLoops.push(enriched);
-      buckets[worst].push(enriched);
-
-      const tierKey = l.tier || 'untiered';
-      const t = tierDist.get(tierKey) || { count: 0, flow: 0 };
-      t.count += 1; t.flow += flow;
-      tierDist.set(tierKey, t);
-
-      const hopKey = String(l.hops);
-      const h = hopDist.get(hopKey) || { count: 0, flow: 0 };
-      h.count += 1; h.flow += flow;
-      hopDist.set(hopKey, h);
-
-      const yMin = Number(l.min_year);
-      const yMax = Number(l.max_year);
-      if (Number.isFinite(yMin) && Number.isFinite(yMax) && yMin <= yMax && yMin > 1990) {
-        const span = yMax - yMin + 1;
-        const flowPerYear = flow / span;
-        for (let y = yMin; y <= yMax; y++) {
-          const cur = yearDist.get(y) || { active: 0, flow: 0 };
-          cur.active += 1;
-          cur.flow += flowPerYear;
-          yearDist.set(y, cur);
-        }
+    const yMin = Number(l.min_year);
+    const yMax = Number(l.max_year);
+    if (Number.isFinite(yMin) && Number.isFinite(yMax) && yMin <= yMax && yMin > 1990) {
+      const span = yMax - yMin + 1;
+      const flowPerYear = flow / span;
+      for (let y = yMin; y <= yMax; y++) {
+        const cur = yearDist.get(y) || { active: 0, flow: 0 };
+        cur.active += 1;
+        cur.flow += flowPerYear;
+        yearDist.set(y, cur);
       }
     }
+  }
 
-    const totalFlow = enrichedLoops.reduce((s, l) => s + l.total_flow, 0);
+  const totalFlow = enrichedLoops.reduce((s, l) => s + l.total_flow, 0);
 
-    // Concentration: share of flow held by top-N loops
-    const sortedFlows = enrichedLoops.map(l => l.total_flow).sort((a, b) => b - a);
-    const concentration = (n) => {
-      const head = sortedFlows.slice(0, n).reduce((s, v) => s + v, 0);
-      return totalFlow > 0 ? head / totalFlow : 0;
-    };
+  // Concentration: share of flow held by top-N loops
+  const sortedFlows = enrichedLoops.map(l => l.total_flow).sort((a, b) => b - a);
+  const concentration = (n) => {
+    const head = sortedFlows.slice(0, n).reduce((s, v) => s + v, 0);
+    return totalFlow > 0 ? head / totalFlow : 0;
+  };
 
-    // Top 10 loops by flow (cross-bucket)
-    const topLoops = [...enrichedLoops]
-      .sort((a, b) => b.total_flow - a.total_flow)
-      .slice(0, 10);
+  // Top 10 loops by flow (cross-bucket)
+  const topLoops = [...enrichedLoops]
+    .sort((a, b) => b.total_flow - a.total_flow)
+    .slice(0, 10);
 
-    // Distributions in array form
-    const tierArr = [...tierDist.entries()].map(([tier, v]) => ({
-      tier,
-      count: v.count,
-      flow: v.flow,
-      flow_fmt: formatCurrency(v.flow),
-    })).sort((a, b) => b.flow - a.flow);
+  // Distributions in array form
+  const tierArr = [...tierDist.entries()].map(([tier, v]) => ({
+    tier,
+    count: v.count,
+    flow: v.flow,
+    flow_fmt: formatCurrency(v.flow),
+  })).sort((a, b) => b.flow - a.flow);
 
-    const hopArr = [...hopDist.entries()].map(([hops, v]) => ({
-      hops: Number(hops),
-      label: `${hops}-hop`,
-      count: v.count,
-      flow: v.flow,
-      flow_fmt: formatCurrency(v.flow),
-    })).sort((a, b) => a.hops - b.hops);
+  const hopArr = [...hopDist.entries()].map(([hops, v]) => ({
+    hops: Number(hops),
+    label: `${hops}-hop`,
+    count: v.count,
+    flow: v.flow,
+    flow_fmt: formatCurrency(v.flow),
+  })).sort((a, b) => a.hops - b.hops);
 
-    const yearArr = [...yearDist.entries()].map(([year, v]) => ({
-      year: Number(year),
-      active_loops: v.active,
-      flow: v.flow,
-      flow_fmt: formatCurrency(v.flow),
-    })).sort((a, b) => a.year - b.year);
+  const yearArr = [...yearDist.entries()].map(([year, v]) => ({
+    year: Number(year),
+    active_loops: v.active,
+    flow: v.flow,
+    flow_fmt: formatCurrency(v.flow),
+  })).sort((a, b) => a.year - b.year);
 
-    // Risk-vs-size scatter: x = unique orgs, y = total flow, size = hops
-    const scatter = enrichedLoops.map(l => ({
-      x: l.unique_orgs,
-      y: l.total_flow,
-      z: l.hops * 40,
-      name: l.short_label,
-      worst: l.worst,
-      flow_fmt: l.total_flow_fmt,
-    }));
+  // Risk-vs-size scatter: x = unique orgs, y = total flow, size = hops
+  const scatter = enrichedLoops.map(l => ({
+    x: l.unique_orgs,
+    y: l.total_flow,
+    z: l.hops * 40,
+    name: l.short_label,
+    worst: l.worst,
+    flow_fmt: l.total_flow_fmt,
+  }));
 
-    const summary = {
-      generated_at: new Date().toISOString(),
-      total_loops_analyzed: enrichedLoops.length,
-      total_flow: totalFlow,
-      total_flow_fmt: formatCurrency(totalFlow),
-      avg_flow_per_loop: enrichedLoops.length ? totalFlow / enrichedLoops.length : 0,
-      avg_flow_per_loop_fmt: formatCurrency(enrichedLoops.length ? totalFlow / enrichedLoops.length : 0),
-      median_flow_fmt: formatCurrency(sortedFlows[Math.floor(sortedFlows.length / 2)] || 0),
-      unique_orgs_touched: new Set(enrichedLoops.flatMap(l => l.short_label ? [] : [])).size || allBNs.length,
-      total_orgs_in_loops: allBNs.length,
-      avg_orgs_per_loop: enrichedLoops.length ? bnTouchCount / enrichedLoops.length : 0,
-      multi_org_loops: multiBnLoops,
-      concentration_top5: concentration(5),
-      concentration_top10: concentration(10),
-      buckets: Object.fromEntries(
-        Object.entries(buckets).map(([k, loops]) => {
-          const flow = loops.reduce((s, l) => s + l.total_flow, 0);
-          return [k, {
-            label: CLASSIFICATION_LABEL[k],
-            count: loops.length,
-            total_flow: flow,
-            total_flow_fmt: formatCurrency(flow),
-            avg_flow: loops.length ? flow / loops.length : 0,
-            avg_flow_fmt: formatCurrency(loops.length ? flow / loops.length : 0),
-            share_of_total: totalFlow > 0 ? flow / totalFlow : 0,
-            top_loops: loops.slice(0, 5),
-          }];
-        })
-      ),
-      tier_distribution: tierArr,
-      hop_distribution: hopArr,
-      year_distribution: yearArr,
-      top_loops: topLoops,
-      scatter,
-    };
+  const summary = {
+    generated_at: new Date().toISOString(),
+    total_loops_analyzed: enrichedLoops.length,
+    total_flow: totalFlow,
+    total_flow_fmt: formatCurrency(totalFlow),
+    avg_flow_per_loop: enrichedLoops.length ? totalFlow / enrichedLoops.length : 0,
+    avg_flow_per_loop_fmt: formatCurrency(enrichedLoops.length ? totalFlow / enrichedLoops.length : 0),
+    median_flow_fmt: formatCurrency(sortedFlows[Math.floor(sortedFlows.length / 2)] || 0),
+    unique_orgs_touched: new Set(enrichedLoops.flatMap(l => l.short_label ? [] : [])).size || allBNs.length,
+    total_orgs_in_loops: allBNs.length,
+    avg_orgs_per_loop: enrichedLoops.length ? bnTouchCount / enrichedLoops.length : 0,
+    multi_org_loops: multiBnLoops,
+    concentration_top5: concentration(5),
+    concentration_top10: concentration(10),
+    buckets: Object.fromEntries(
+      Object.entries(buckets).map(([k, loops]) => {
+        const flow = loops.reduce((s, l) => s + l.total_flow, 0);
+        return [k, {
+          label: CLASSIFICATION_LABEL[k],
+          count: loops.length,
+          total_flow: flow,
+          total_flow_fmt: formatCurrency(flow),
+          avg_flow: loops.length ? flow / loops.length : 0,
+          avg_flow_fmt: formatCurrency(loops.length ? flow / loops.length : 0),
+          share_of_total: totalFlow > 0 ? flow / totalFlow : 0,
+          top_loops: loops.slice(0, 5),
+        }];
+      })
+    ),
+    tier_distribution: tierArr,
+    hop_distribution: hopArr,
+    year_distribution: yearArr,
+    top_loops: topLoops,
+    scatter,
+  };
 
-    return summary;
+  return summary;
 }
 
 app.get('/api/summary', async (req, res) => {
