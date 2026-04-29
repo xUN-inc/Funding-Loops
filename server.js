@@ -1,9 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
+const fsp = require('fs/promises');
 const { Pool } = require('pg');
 const { GoogleGenAI } = require('@google/genai');
 const { execSync } = require('child_process');
+const { cacheGet, cacheSet, cacheCount, close: closeCache } = require('./lib/cache');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,6 +71,53 @@ const memoCache = new Map();   // id -> { memo, verdict, loopId, generated_at }
 let cachedLoops = [];          // top 20 loops loaded at startup
 let pregenProgress = { done: 0, total: 0 };
 const startTime = Date.now();
+
+// --- Disk persistence for memoCache ---
+// Memos are expensive to regenerate (Gemini token spend) and rarely change,
+// since they're keyed on loop ID and the underlying matviews refresh nightly
+// at most. Persisting to disk means a deploy/restart doesn't re-pay for the
+// top-N memos that pregen already produced.
+const CACHE_DIR = path.join(__dirname, 'cache');
+const MEMO_CACHE_FILE = path.join(CACHE_DIR, 'memos.json');
+let memoWriteQueue = Promise.resolve();
+
+function loadMemoCacheFromDisk() {
+  try {
+    if (!fs.existsSync(MEMO_CACHE_FILE)) return 0;
+    const raw = fs.readFileSync(MEMO_CACHE_FILE, 'utf8');
+    if (!raw.trim()) return 0;
+    const parsed = JSON.parse(raw);
+    let count = 0;
+    for (const [id, entry] of Object.entries(parsed)) {
+      if (entry && typeof entry.memo === 'string' && entry.verdict) {
+        memoCache.set(id, entry);
+        count++;
+      }
+    }
+    return count;
+  } catch (err) {
+    console.warn(`[memoCache] disk load failed (${err.message}) — starting empty.`);
+    return 0;
+  }
+}
+
+// Atomic write: serialize all writes through a queue, write to a tmp file,
+// then rename. Rename is atomic on POSIX, so a crash mid-write can't leave
+// memos.json half-written.
+function persistMemoCache() {
+  memoWriteQueue = memoWriteQueue.then(async () => {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      const snapshot = Object.fromEntries(memoCache);
+      const tmp = MEMO_CACHE_FILE + '.tmp';
+      await fsp.writeFile(tmp, JSON.stringify(snapshot), 'utf8');
+      await fsp.rename(tmp, MEMO_CACHE_FILE);
+    } catch (err) {
+      console.warn('[memoCache] disk write failed:', err.message);
+    }
+  });
+  return memoWriteQueue;
+}
 
 // ============================================================
 // Helper: resolve BN array to charity profiles (most recent year)
@@ -714,25 +764,45 @@ async function generateMemo(loopId) {
     controlling_directors: directorContext,
   };
 
-  const prompt = `You are a forensic accountant reviewing Canadian charity funding patterns for a government accountability investigation. Analyze this circular funding loop in exactly 3 paragraphs of plain prose.
-
-OUTPUT RULES (strict):
-- Plain text only. No salutation ("Dear", "To whom it may concern"), no signature, no sender/recipient block, no date line, no "Subject:" or "Re:" header, no "Sincerely" / "Regards".
-- No markdown. No bullet points. No headings. No bold or italics. No "Paragraph 1:" labels.
-- Just three paragraphs separated by a blank line, then the verdict tag on its own line.
-
-Paragraph 1: What these organizations are and what they claim to do. If a charity has a classification label, NAME it (e.g. "X is classified as overhead extraction") and explain what that bucket means in one short clause.
-
-Paragraph 2: What is financially suspicious or normal about this loop — consider government funding dependency, overhead ratios, whether the flow amounts are proportionate to org size, and whether the same money appears to be counted multiple times. The leakage model treats both own-program spending AND gifts to other qualified donees as "useful" disbursement (because foundations legitimately distribute via grants, not their own programs). Use leakage as primary evidence when leakage_pct exceeds 60%. If most members are foundations (designation A or B) and leakage_pct is low, do NOT call that suspicious — that is the structurally expected pattern for endowment/grant-making networks. If controlling_directors is non-empty, NAME the individual(s) and state how many of these charities they sit on. A single person on multiple boards inside one cycle is the strongest possible signal that the cycle is operated by one decision-maker.
-
-Paragraph 3: A verdict — is this loop LIKELY BENIGN (normal federated structure), REQUIRES SCRUTINY (unusual but possibly explainable), or RED FLAG (pattern consistent with revenue inflation, receipt generation, or overhead extraction). Explain your verdict in plain English a journalist could quote. Cite specific classification labels and director names where they exist.
-
-If federal grants exist for organizations in this loop, factor this into your analysis. Government money entering a circular funding loop is significantly more concerning than purely private donations cycling. Note specifically if grant money appears to enter the loop and then circulate without clear programmatic output.
-
-End your response with exactly one of these tags on its own line:
+  const prompt = `You are a forensic accountant reviewing a circular charity funding pattern for a Canadian government accountability investigation. Produce a tight bulleted signal list — NOT prose.
+ 
+OUTPUT FORMAT (strict):
+- Each line is one bullet starting with "- ".
+- Every bullet has TWO parts separated by " | Source: ":
+  - The SIGNAL: a 12-25 word clause naming the red flag, structural exemption, or absence of concern. Lead with the strongest evidence first.
+  - The SOURCE: which database table/column or computed metric produced this evidence. Use the canonical names from the DATA SOURCES list below.
+- 4 to 8 bullets total. Stop when you run out of meaningful signals — do not pad.
+- No salutation, no headers, no paragraphs, no closing remarks, no "Sincerely". No markdown bold/italic, no nested bullets.
+- After the bullets, leave one blank line, then the verdict tag on its own line.
+ 
+DATA SOURCES you may cite (use these exact names):
+- cra.loop_classification — bucket labels (overhead_extraction, receipt_generation, revenue_inflation, structural, low_risk), risk_score 0-30, overhead_pct, program_pct
+- cra.loop_charity_financials — program_spending, gifts_given_donees, compensation_spending, admin_spending, fundraising_spending, revenue, designation
+- cra.overhead_by_charity / cra.govt_funding_by_charity — total_revenue, federal_government_revenue, provincial_government_revenue, strict_overhead_pct
+- cra.cra_directors — last_name + first_name match across loop BNs (controlling-director signal)
+- fed.grants_contributions — agreement_value, owner_org, agreement_title (federal grant entering the loop)
+- general.entity_golden_records — aliases, dataset_sources (cross-dataset / renamed-shell signal)
+- cra.partitioned_cycles — hops, total_flow, bottleneck_amt, year_range
+- computed: leakage_pct (loop-level), data_coverage (fraction of BNs with financial data)
+ 
+INTERPRETATION RULES:
+- Treat leakage_pct >= 60% as a primary red flag. Below 40% is fine.
+- If most members are designation A or B (foundations) and leakage is low, that is structurally expected — call it out as a benign signal, not a concern.
+- A single named individual sitting on 2+ boards inside the cycle is the strongest single signal. Always include such a bullet by name when controlling_directors is non-empty.
+- Federal grant dollars entering a high-leakage loop is materially worse than private donations cycling. Call this out explicitly.
+- When a charity is classified as \'structural\', mark it as a benign-by-design signal, not a red flag.
+ 
+VERDICT TAG (last line, exactly one of):
 [VERDICT: LIKELY BENIGN]
 [VERDICT: REQUIRES SCRUTINY]
 [VERDICT: RED FLAG]
+ 
+EXAMPLES of well-formed bullets (do not copy verbatim — generate from the data):
+- Loop leakage 87% — most of one bottleneck dollar is absorbed by compensation and admin, not programs | Source: cra.loop_charity_financials (compensation_spending + admin_spending vs program_spending)
+- Walter Berlin sits on 3 of 4 boards in the cycle, including the highest-flow node | Source: cra.cra_directors (shared last_name + first_name across loop BNs)
+- $4.2M federal grant from Employment and Social Development Canada flows into the highest-leakage participant | Source: fed.grants_contributions (agreement_value, owner_org)
+- All 4 charities are designation B private foundations with overhead under 15% — endowment grant cycle, structurally expected | Source: cra.loop_classification (designation, classification=structural)
+ 
 
 Data: ${JSON.stringify(loopData, null, 2)}`;
 
@@ -749,6 +819,7 @@ Data: ${JSON.stringify(loopData, null, 2)}`;
 
     const result = { memo: memoText, verdict, loopId: key, generated_at: new Date().toISOString() };
     memoCache.set(key, result);
+    persistMemoCache();
     return result;
   } catch (err) {
     console.error(`Gemini memo failed for loop #${loopId}:`, err.message);
@@ -758,6 +829,7 @@ Data: ${JSON.stringify(loopData, null, 2)}`;
       loopId: key,
       generated_at: new Date().toISOString(),
     };
+    // Don't persist fallbacks — they're transient errors we want to retry next time.
     memoCache.set(key, fallback);
     return fallback;
   }
@@ -843,13 +915,13 @@ const VALID_CLASSES = new Set(['overhead_extraction', 'receipt_generation', 'rev
 
 app.get('/api/loops', async (req, res) => {
   try {
-    const limit         = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
-    const offset        = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const sort          = VALID_SORTS.has(req.query.sort) ? req.query.sort : 'flow';
-    const dir           = req.query.dir === 'asc' ? 'asc' : 'desc';
-    const classes       = (req.query.classifications || '')
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const sort = VALID_SORTS.has(req.query.sort) ? req.query.sort : 'flow';
+    const dir = req.query.dir === 'asc' ? 'asc' : 'desc';
+    const classes = (req.query.classifications || '')
       .split(',').map(s => s.trim()).filter(s => VALID_CLASSES.has(s));
-    const minDirectors  = Math.max(parseInt(req.query.min_directors, 10) || 0, 0);
+    const minDirectors = Math.max(parseInt(req.query.min_directors, 10) || 0, 0);
 
     const all = await getLoopPool();
 
@@ -860,10 +932,10 @@ app.get('/api/loops', async (req, res) => {
 
     // Sort
     const sortKey = {
-      flow:      l => l.total_flow,
+      flow: l => l.total_flow,
       directors: l => l.shared_directors,
-      hops:      l => l.hops,
-      recent:    l => l.max_year,
+      hops: l => l.hops,
+      recent: l => l.max_year,
     }[sort];
     const mult = dir === 'desc' ? -1 : 1;
     filtered = [...filtered].sort((a, b) => (sortKey(a) - sortKey(b)) * mult);
@@ -924,122 +996,138 @@ async function buildLoopDetail(id) {
   const loop = rows[0];
   const bns = parseBNs(loop.path_display);
 
-    // path_display closes the cycle (e.g. A→B→C→A), so bns has the
-    // first BN repeated at the end. Dedupe for the leakage waterfall
-    // so each charity is listed once; keep `bns` as-is for nodes/edges
-    // so the network graph still draws the closing edge.
-    const uniqBns = [...new Set(bns)];
+  // path_display closes the cycle (e.g. A→B→C→A), so bns has the
+  // first BN repeated at the end. Dedupe for the leakage waterfall
+  // so each charity is listed once; keep `bns` as-is for nodes/edges
+  // so the network graph still draws the closing edge.
+  const uniqBns = [...new Set(bns)];
 
-    const [profiles, overhead, fedDetail, classMap, directors, golden, finMap] = await Promise.all([
-      resolveProfiles(bns),
-      getOverhead(bns),
-      getDetailedFederalGrants(bns),
-      getClassifications(bns),
-      getDirectorOverlap(bns),
-      getGoldenEnrichment(bns),
-      getLoopFinancials(uniqBns),
-    ]);
+  const [profiles, overhead, fedDetail, classMap, directors, golden, finMap] = await Promise.all([
+    resolveProfiles(bns),
+    getOverhead(bns),
+    getDetailedFederalGrants(bns),
+    getClassifications(bns),
+    getDirectorOverlap(bns),
+    getGoldenEnrichment(bns),
+    getLoopFinancials(uniqBns),
+  ]);
 
-    const profileMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
-    const overheadMap = Object.fromEntries(overhead.map(o => [o.bn, o]));
+  const profileMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
+  const overheadMap = Object.fromEntries(overhead.map(o => [o.bn, o]));
 
-    // Loop Leakage Rate — how much of one bottleneck dollar entering the
-    // cycle reaches a charitable purpose (own programs or grants to other
-    // qualified donees) vs. is absorbed by comp / admin / fundraising.
-    const leakage = computeLeakage(uniqBns, finMap, loop.bottleneck_amt);
+  // Loop Leakage Rate — how much of one bottleneck dollar entering the
+  // cycle reaches a charitable purpose (own programs or grants to other
+  // qualified donees) vs. is absorbed by comp / admin / fundraising.
+  const leakage = computeLeakage(uniqBns, finMap, loop.bottleneck_amt);
 
-    // Decorate waterfall entries with display names for the UI.
-    leakage.waterfall = leakage.waterfall.map(w => ({
-      ...w,
-      legal_name: profileMap[w.bn]?.legal_name || w.bn,
-    }));
+  // Decorate waterfall entries with display names for the UI.
+  leakage.waterfall = leakage.waterfall.map(w => ({
+    ...w,
+    legal_name: profileMap[w.bn]?.legal_name || w.bn,
+  }));
 
-    // Build nodes
-    const nodes = bns.map(bn => {
-      const prof = profileMap[bn] || {};
-      const oh = overheadMap[bn] || {};
-      const c = classMap[bn] || {};
-      const g = golden[bn] || {};
-      const totalRev = Number(oh.total_revenue) || 0;
-      const fedRev = Number(oh.federal_government_revenue) || 0;
-      const provRev = Number(oh.provincial_government_revenue) || 0;
-      const govPct = oh.govt_share_of_rev != null
-        ? Number(oh.govt_share_of_rev)
-        : (totalRev > 0 ? (fedRev + provRev) / totalRev : 0);
-
-      return {
-        bn,
-        legal_name: prof.legal_name || bn,
-        city: prof.city || 'Unknown',
-        province: prof.province || 'Unknown',
-        category_name: prof.category_name || 'Unknown',
-        designation: c.designation || null,
-        classification: c.classification || null,
-        classification_label: c.classification ? CLASSIFICATION_LABEL[c.classification] : null,
-        risk_score: c.total_score != null ? Number(c.total_score) : null,
-        overhead_pct: c.overhead_pct != null ? Number(c.overhead_pct) : null,
-        program_pct: c.program_pct != null ? Number(c.program_pct) : null,
-        total_revenue: totalRev,
-        total_revenue_fmt: formatCurrency(totalRev),
-        federal_government_revenue: fedRev,
-        provincial_government_revenue: provRev,
-        strict_overhead_pct: oh.strict_overhead_pct != null ? Number(oh.strict_overhead_pct) : null,
-        gov_funding_pct: govPct,
-        color: govPct > 0.7 ? 'red' : govPct > 0.4 ? 'orange' : 'green',
-        // Cross-dataset golden-record enrichment
-        aliases: g.aliases || [],
-        dataset_sources: g.dataset_sources || [],
-        in_fed: !!g.in_fed,
-        in_ab: !!g.in_ab,
-        related_count: g.related_count || 0,
-      };
-    });
-
-    const worstCls = worstClassification(classMap, bns);
-    const directorContext = directors.map(d => ({
-      director_name: d.director_name,
-      boards_in_cycle: d.boards_in_cycle,
-      bns: d.bns,
-      charity_names: d.bns.map(bn => profileMap[bn]?.legal_name || bn),
-    }));
-
-    // Build edges (sequential pairs in the path, plus last → first to close loop)
-    const edges = [];
-    for (let i = 0; i < bns.length - 1; i++) {
-      edges.push({ source: bns[i], target: bns[i + 1] });
-    }
-    // Close the loop
-    if (bns.length > 1) {
-      edges.push({ source: bns[bns.length - 1], target: bns[0] });
-    }
+  // Build nodes
+  const nodes = bns.map(bn => {
+    const prof = profileMap[bn] || {};
+    const oh = overheadMap[bn] || {};
+    const c = classMap[bn] || {};
+    const g = golden[bn] || {};
+    const totalRev = Number(oh.total_revenue) || 0;
+    const fedRev = Number(oh.federal_government_revenue) || 0;
+    const provRev = Number(oh.provincial_government_revenue) || 0;
+    const govPct = oh.govt_share_of_rev != null
+      ? Number(oh.govt_share_of_rev)
+      : (totalRev > 0 ? (fedRev + provRev) / totalRev : 0);
 
     return {
-      loop: {
-        id: loop.id,
-        hops: loop.hops,
-        total_flow: loop.total_flow,
-        total_flow_fmt: formatCurrency(Number(loop.total_flow)),
-        bottleneck_amt: loop.bottleneck_amt,
-        bottleneck_amt_fmt: formatCurrency(Number(loop.bottleneck_amt)),
-        min_year: loop.min_year,
-        max_year: loop.max_year,
-        tier: loop.tier,
-        worst_classification: worstCls,
-        worst_classification_label: CLASSIFICATION_LABEL[worstCls] || 'Low Risk',
-      },
-      nodes,
-      edges,
-      federal_grants: fedDetail,
-      directors: directorContext,
-      leakage,
+      bn,
+      legal_name: prof.legal_name || bn,
+      city: prof.city || 'Unknown',
+      province: prof.province || 'Unknown',
+      category_name: prof.category_name || 'Unknown',
+      designation: c.designation || null,
+      classification: c.classification || null,
+      classification_label: c.classification ? CLASSIFICATION_LABEL[c.classification] : null,
+      risk_score: c.total_score != null ? Number(c.total_score) : null,
+      overhead_pct: c.overhead_pct != null ? Number(c.overhead_pct) : null,
+      program_pct: c.program_pct != null ? Number(c.program_pct) : null,
+      total_revenue: totalRev,
+      total_revenue_fmt: formatCurrency(totalRev),
+      federal_government_revenue: fedRev,
+      provincial_government_revenue: provRev,
+      strict_overhead_pct: oh.strict_overhead_pct != null ? Number(oh.strict_overhead_pct) : null,
+      gov_funding_pct: govPct,
+      color: govPct > 0.7 ? 'red' : govPct > 0.4 ? 'orange' : 'green',
+      // Cross-dataset golden-record enrichment
+      aliases: g.aliases || [],
+      dataset_sources: g.dataset_sources || [],
+      in_fed: !!g.in_fed,
+      in_ab: !!g.in_ab,
+      related_count: g.related_count || 0,
     };
+  });
+
+  const worstCls = worstClassification(classMap, bns);
+  const directorContext = directors.map(d => ({
+    director_name: d.director_name,
+    boards_in_cycle: d.boards_in_cycle,
+    bns: d.bns,
+    charity_names: d.bns.map(bn => profileMap[bn]?.legal_name || bn),
+  }));
+
+  // Build edges (sequential pairs in the path, plus last → first to close loop)
+  const edges = [];
+  for (let i = 0; i < bns.length - 1; i++) {
+    edges.push({ source: bns[i], target: bns[i + 1] });
+  }
+  // Close the loop
+  if (bns.length > 1) {
+    edges.push({ source: bns[bns.length - 1], target: bns[0] });
+  }
+
+  return {
+    loop: {
+      id: loop.id,
+      hops: loop.hops,
+      total_flow: loop.total_flow,
+      total_flow_fmt: formatCurrency(Number(loop.total_flow)),
+      bottleneck_amt: loop.bottleneck_amt,
+      bottleneck_amt_fmt: formatCurrency(Number(loop.bottleneck_amt)),
+      min_year: loop.min_year,
+      max_year: loop.max_year,
+      tier: loop.tier,
+      worst_classification: worstCls,
+      worst_classification_label: CLASSIFICATION_LABEL[worstCls] || 'Low Risk',
+    },
+    nodes,
+    edges,
+    federal_grants: fedDetail,
+    directors: directorContext,
+    leakage,
+  };
 }
+
+// Layered lookup: L1 in-process Map -> L2 SQLite (lib/cache) -> L3 Postgres.
+// Both layers share the same TTL so a restart doesn't change freshness
+// semantics. L2 only stores positive results — 404s aren't worth persisting,
+// they're cheap to recompute and rare enough not to matter.
+const LOOP_DETAIL_NS = 'loop_detail';
 
 async function getLoopDetail(id) {
   const key = String(id);
   const now = Date.now();
+
   const hit = loopDetailCache.get(key);
   if (hit && now - hit.at < LOOP_DETAIL_TTL_MS) return hit.payload;
+
+  // L2 check before inflight dedup. SQLite read is sub-ms and synchronous,
+  // so doing it here saves us from kicking off a duplicate build when the
+  // detail is already on disk from a previous process.
+  const l2 = cacheGet(LOOP_DETAIL_NS, key, LOOP_DETAIL_TTL_MS);
+  if (l2) {
+    loopDetailCache.set(key, { payload: l2, at: now });
+    return l2;
+  }
 
   // Dedupe: if another caller is already building the same id, await its promise.
   if (loopDetailInflight.has(key)) return loopDetailInflight.get(key);
@@ -1048,6 +1136,15 @@ async function getLoopDetail(id) {
     try {
       const payload = await buildLoopDetail(id);
       loopDetailCache.set(key, { payload, at: Date.now() });
+      // Only persist real payloads. The 404 sentinel is a Symbol and not
+      // serializable, so guard against it explicitly.
+      if (payload !== LOOP_DETAIL_NOT_FOUND) {
+        try {
+          cacheSet(LOOP_DETAIL_NS, key, payload);
+        } catch (err) {
+          console.warn(`[cache] L2 write failed for loop ${key}:`, err.message);
+        }
+      }
       return payload;
     } finally {
       loopDetailInflight.delete(key);
@@ -1764,6 +1861,172 @@ app.get('/api/recipient/:name', async (req, res) => {
 });
 
 // ============================================================
+// POST /api/nl-search — Natural-language → SQL → AI summary
+// ============================================================
+const NL_SCHEMA = `
+You have access to a PostgreSQL database with the following read-only tables and views.
+All monetary values are in CAD. Business numbers (bn) are 9-digit strings identifying Canadian charities.
+
+SCHEMA:
+
+cra.vw_charity_profiles
+  bn TEXT, legal_name TEXT, city TEXT, province TEXT, category_name TEXT, fiscal_year INT
+
+cra.overhead_by_charity
+  bn TEXT, fiscal_year INT, revenue NUMERIC, strict_overhead_pct NUMERIC
+
+cra.govt_funding_by_charity
+  bn TEXT, fiscal_year INT, federal NUMERIC, provincial NUMERIC, govt_share_of_rev NUMERIC
+
+cra.loop_charity_financials
+  bn TEXT, designation TEXT (A=Public Foundation, B=Private Foundation, C=Charitable Organization),
+  category TEXT, program_spending NUMERIC, gifts_given_donees NUMERIC,
+  compensation_spending NUMERIC, admin_spending NUMERIC, fundraising_spending NUMERIC,
+  total_expenditures NUMERIC, revenue NUMERIC
+
+cra.loop_classification
+  bn TEXT, classification TEXT (one of: structural, overhead_extraction, receipt_generation, revenue_inflation, low_risk),
+  total_score NUMERIC (0-30 risk score), overhead_pct NUMERIC, program_pct NUMERIC, designation TEXT
+
+cra.partitioned_cycles  (detected circular funding loops)
+  id INT, hops INT, total_flow NUMERIC, bottleneck_amt NUMERIC,
+  path_display TEXT, min_year INT, max_year INT, tier TEXT
+
+cra.cra_directors
+  bn TEXT, director_name TEXT
+
+fed.grants_contributions  (federal grants & contributions)
+  bn TEXT, owner_org TEXT, owner_org_title TEXT,
+  recipient_name TEXT, recipient_city TEXT, recipient_province TEXT, recipient_type TEXT,
+  agreement_value NUMERIC, agreement_title_en TEXT, prog_name_en TEXT,
+  agreement_start_date DATE, agreement_end_date DATE, is_amendment BOOLEAN
+
+ab.ab_grants  (Alberta grants)
+  ministry TEXT, program TEXT, amount NUMERIC, fiscal_year TEXT, recipient_name TEXT
+
+ab.ab_contracts  (Alberta contracts)
+  ministry TEXT, amount NUMERIC, fiscal_year TEXT, recipient_name TEXT
+
+ab.ab_sole_source  (Alberta sole-source awards)
+  ministry TEXT, contract_value NUMERIC, contract_description TEXT, contract_date DATE, recipient_name TEXT
+
+general.entity_golden_records  (canonical cross-dataset entities)
+  canonical_name TEXT, bn TEXT, in_fed BOOLEAN, in_ab BOOLEAN,
+  aliases TEXT[], dataset_sources TEXT[]
+
+JOINS: Use bn to join cra tables together and to fed.grants_contributions.
+Use legal_name / recipient_name for cross-schema name matching.
+For most recent data per charity, use DISTINCT ON (bn) ORDER BY bn, fiscal_year DESC.
+`.trim();
+
+const BLOCKED_PATTERNS = /\b(insert|update|delete|drop|create|alter|truncate|copy|pg_read_file|pg_ls_dir|pg_exec|dblink)\b/i;
+
+function safeguardSQL(sql) {
+  const trimmed = sql.trim().replace(/^```sql\s*/i, '').replace(/```\s*$/, '').trim();
+  if (!/^select\b/i.test(trimmed)) {
+    throw new Error('Only SELECT queries are allowed.');
+  }
+  if (BLOCKED_PATTERNS.test(trimmed)) {
+    throw new Error('Query contains disallowed operations.');
+  }
+  // Prevent stacked queries
+  if (/;\s*\S/.test(trimmed)) {
+    throw new Error('Multiple statements are not allowed.');
+  }
+  // Enforce result cap
+  if (!/\blimit\b/i.test(trimmed)) {
+    return trimmed.replace(/;?\s*$/, '') + '\nLIMIT 100';
+  }
+  return trimmed;
+}
+
+app.post('/api/nl-search', async (req, res) => {
+  const { query } = req.body || {};
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  if (query.length > 500) {
+    return res.status(400).json({ error: 'query too long (max 500 chars)' });
+  }
+
+  // Step 1: NL → SQL
+  let rawSql;
+  try {
+    const sqlPrompt = `${NL_SCHEMA}
+
+USER QUESTION: "${query.trim()}"
+
+Return ONLY a valid PostgreSQL SELECT statement that answers the question.
+- No markdown, no explanation, no code fences.
+- Always include LIMIT 100 or fewer.
+- Use aliases for readability (e.g. AS "Charity Name").
+- Format currency columns with TO_CHAR(col, 'FM$999,999,999') where helpful.
+- If the question is ambiguous, use the most recent fiscal_year available.
+- Prefer joining cra.vw_charity_profiles to get legal_name for charity BNs.`;
+
+    const sqlResp = await geminiCall({
+      model: GEMINI_MODEL,
+      contents: sqlPrompt,
+    }, 'nl-search:sql');
+
+    rawSql = sqlResp.text?.trim() || '';
+  } catch (err) {
+    console.error('[nl-search] SQL generation failed:', err.message);
+    return res.status(500).json({ error: 'AI could not generate a query. Please try rephrasing.' });
+  }
+
+  // Step 2: Validate + sanitize SQL
+  let safeSQL;
+  try {
+    safeSQL = safeguardSQL(rawSql);
+  } catch (err) {
+    console.warn('[nl-search] SQL rejected:', err.message, '| raw:', rawSql.slice(0, 200));
+    return res.status(422).json({ error: `Generated query was invalid: ${err.message}` });
+  }
+
+  // Step 3: Execute
+  let rows, columns;
+  try {
+    const result = await pool.query(safeSQL);
+    rows = result.rows;
+    columns = result.fields.map(f => f.name);
+  } catch (err) {
+    console.error('[nl-search] Query execution failed:', err.message);
+    return res.status(422).json({
+      error: 'The generated query had a database error. Try rephrasing your question.',
+      sql: safeSQL,
+      db_error: err.message,
+    });
+  }
+
+  // Step 4: AI summary of results
+  let summary = '';
+  try {
+    const rowSample = rows.slice(0, 30);
+    const summaryPrompt = `A user asked: "${query.trim()}"
+
+The database returned ${rows.length} result(s). Here is a sample (up to 30 rows):
+${JSON.stringify(rowSample, null, 2)}
+
+Write 2-3 sentences in plain English summarizing what the data shows.
+Be specific: mention numbers, names, totals, trends. No bullet points. No markdown.
+Write for a non-technical audience investigating Canadian government accountability.`;
+
+    const sumResp = await geminiCall({
+      model: GEMINI_MODEL,
+      contents: summaryPrompt,
+    }, 'nl-search:summary');
+
+    summary = sumResp.text?.trim() || '';
+  } catch (err) {
+    console.warn('[nl-search] Summary generation failed:', err.message);
+    summary = `Found ${rows.length} result(s) matching your query.`;
+  }
+
+  res.json({ sql: safeSQL, columns, rows, rowCount: rows.length, summary });
+});
+
+// ============================================================
 // GET /api/health — System health (db + matview + memo + golden)
 // ============================================================
 app.get('/api/health', async (req, res) => {
@@ -1784,6 +2047,9 @@ app.get('/api/health', async (req, res) => {
     golden_records: goldenOk ? 'available' : 'missing',
     memo_progress: `${pregenProgress.done}/${pregenProgress.total}`,
     memo_complete: pregenProgress.total > 0 && pregenProgress.done === pregenProgress.total,
+    l2_cache: {
+      loop_detail_entries: cacheCount(LOOP_DETAIL_NS),
+    },
     uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
   });
 });
@@ -1792,6 +2058,18 @@ app.get('/api/health', async (req, res) => {
 // Startup sequence
 // ============================================================
 async function startup() {
+  // Step 0: Rehydrate memoCache from disk so a restart doesn't re-pay
+  // Gemini for memos we've already generated. Runs before app.listen()
+  // so /api/verdicts can serve cached entries immediately.
+  const restored = loadMemoCacheFromDisk();
+  if (restored > 0) {
+    console.log(`[memoCache] rehydrated ${restored} memo(s) from disk.`);
+  }
+  const l2DetailCount = cacheCount(LOOP_DETAIL_NS);
+  if (l2DetailCount > 0) {
+    console.log(`[cache] ${l2DetailCount} loop_detail entr${l2DetailCount === 1 ? 'y' : 'ies'} available in L2 (SQLite).`);
+  }
+
   // Step 1: Test database connection
   console.log('Testing database connection...');
   try {
@@ -1816,7 +2094,10 @@ async function startup() {
 
   cachedLoops = loops.filter(l => !isFederatedTransfer(parseBNs(l.path_display))).slice(0, 20);
   pregenProgress.total = cachedLoops.length;
-  console.log(`${cachedLoops.length} loops loaded.`);
+  // Reflect any memos already restored from disk so /api/health reports
+  // accurate progress and the UI doesn't show 0/20 while pregen no-ops.
+  pregenProgress.done = cachedLoops.filter(l => memoCache.has(String(l.id))).length;
+  console.log(`${cachedLoops.length} loops loaded. ${pregenProgress.done} memos already cached.`);
 
   // Step 3: Start Express server FIRST so frontend can connect immediately.
   // Memo pregen runs in background; UI shows progress via /api/health.
@@ -1834,10 +2115,14 @@ async function startup() {
 
   // Step 5: Pre-generate memo #1 (top loop) before kicking off rest
   if (cachedLoops.length > 0) {
+    const topId = String(cachedLoops[0].id);
+    const wasCached = memoCache.has(topId);
     console.log('Pre-generating memo 1/' + cachedLoops.length + ' (top loop)...');
     await generateMemo(cachedLoops[0].id);
-    pregenProgress.done = 1;
-    console.log(`Memo 1 ready — verdict: ${memoCache.get(String(cachedLoops[0].id))?.verdict}`);
+    // Only bump the counter if this run actually produced the memo.
+    // If it was rehydrated from disk, we already counted it above.
+    if (!wasCached) pregenProgress.done++;
+    console.log(`Memo 1 ready — verdict: ${memoCache.get(topId)?.verdict}`);
   }
 
   // Step 6: Pre-generate memos 2-20 asynchronously (max 10 concurrent — Gemini
@@ -1878,9 +2163,11 @@ async function preGenerateRemaining(loops) {
       const i = idx++;
       const loop = loops[i];
       const num = i + 2; // +2 because #1 is already done
+      const key = String(loop.id);
+      const wasCached = memoCache.has(key);
       console.log(`Pre-generating memo ${num}/${cachedLoops.length}...`);
       await generateMemo(loop.id);
-      pregenProgress.done++;
+      if (!wasCached) pregenProgress.done++;
     }
   }
 
@@ -1918,3 +2205,29 @@ startup().catch(err => {
   console.error('Startup failed:', err);
   process.exit(1);
 });
+
+// On graceful shutdown, drain any pending memoCache writes so we don't lose
+// the most recent memo to a half-written file. Per-write persistence already
+// keeps the on-disk file fresh; this just waits for the queue to flush.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[${signal}] flushing memoCache to disk...`);
+  try {
+    await persistMemoCache();
+    await memoWriteQueue;
+  } catch (err) {
+    console.warn('shutdown flush failed:', err.message);
+  }
+  // Closing the SQLite handle checkpoints the WAL into the main db file
+  // so there's no recovery work on next start.
+  try {
+    closeCache();
+  } catch (err) {
+    console.warn('cache close failed:', err.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

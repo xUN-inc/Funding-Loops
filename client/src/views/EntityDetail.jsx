@@ -19,15 +19,19 @@ export default function EntityDetail({ name }) {
   if (!data) return <SectionCard title="Recipient"><LoadingState message="Loading recipient…" /></SectionCard>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <SectionCard title={data.display_name} subtitle={[data.city, data.province].filter(Boolean).join(', ') || 'Location unknown'} accent={C.cyan}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+    <div className="flex flex-col gap-4">
+      <SectionCard
+        title={data.display_name}
+        subtitle={[data.city, data.province].filter(Boolean).join(', ') || 'Location unknown'}
+        accent={C.cyan}
+      >
+        <div className="grid grid-cols-3 gap-3">
           <StatCard label="Federal"  value={data.totals.federal_fmt} accent={C.primary} />
           <StatCard label="Alberta"  value={data.totals.alberta_fmt} accent={C.warning} />
           <StatCard label="Total"    value={data.totals.grand_total_fmt} accent={C.cyan} />
         </div>
         {data.recipient_type ? (
-          <div style={{ marginTop: 12 }}>
+          <div className="mt-3">
             <Badge color="gray">{data.recipient_type}</Badge>
           </div>
         ) : null}
@@ -38,8 +42,8 @@ export default function EntityDetail({ name }) {
           title="Federal Grants"
           subtitle={`${data.federal.grant_count} agreements · ${data.federal.dept_count} departments`}
         >
-          <div style={{ overflowX: 'auto', maxHeight: 320, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <div className="overflow-x-auto overflow-y-auto max-h-[320px]">
+            <table className="w-full border-collapse">
               <thead>
                 <tr>
                   <Th>Department</Th>
@@ -69,7 +73,7 @@ export default function EntityDetail({ name }) {
           subtitle={`Contracts ${data.alberta.contract_total_fmt} · Sole-source ${data.alberta.sole_source_total_fmt} · Grants ${data.alberta.grant_total_fmt}`}
           accent={C.warning}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="flex flex-col gap-3.5">
             {data.alberta.contracts.length ? (
               <SubTable title="Contracts" rows={data.alberta.contracts}
                 cols={[
@@ -103,15 +107,15 @@ export default function EntityDetail({ name }) {
 }
 
 function SubTable({ title, rows, cols }) {
-  const { C } = useTheme();
   return (
     <div>
-      <div style={{
-        fontSize: 10, fontWeight: 700, color: C.text3,
-        textTransform: 'uppercase', letterSpacing: '.1em',
-        fontFamily: 'var(--font-geist-mono), monospace', marginBottom: 6,
-      }}>{title}</div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div
+        className="text-[10px] font-bold text-text3 uppercase font-mono mb-1.5"
+        style={{ letterSpacing: '.1em' }}
+      >
+        {title}
+      </div>
+      <table className="w-full border-collapse">
         <thead>
           <tr>{cols.map(c => <Th key={c.label} right={c.right}>{c.label}</Th>)}</tr>
         </thead>

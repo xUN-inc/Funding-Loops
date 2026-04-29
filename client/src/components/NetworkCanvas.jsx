@@ -195,29 +195,22 @@ export default function NetworkCanvas({
   };
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', width: '100%' }}>
+    <div ref={wrapRef} className="relative w-full">
       <canvas
         ref={canvasRef}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerLeave}
+        className="block w-full bg-surface border border-border rounded-lg"
         style={{
-          display: 'block', width: '100%', height,
-          background: C.surface,
-          border: `1px solid ${C.border}`,
-          borderRadius: 8,
+          height,
           cursor: hoverId ? (dragRef.current ? 'grabbing' : 'grab') : 'default',
           touchAction: 'none',
         }}
       />
       {tooltip ? <NodeTooltip {...tooltip} /> : null}
-      <div style={{
-        position: 'absolute', bottom: 8, right: 12,
-        fontSize: 10, color: C.text3,
-        fontFamily: 'var(--font-geist-mono), monospace',
-        pointerEvents: 'none',
-      }}>
+      <div className="absolute bottom-2 right-3 text-[10px] text-text3 font-mono pointer-events-none">
         drag nodes · radius = revenue
       </div>
     </div>
@@ -374,23 +367,15 @@ function NodeTooltip({ x, y, node }) {
   top  = Math.max(8, top);
 
   return (
-    <div style={{
-      position: 'fixed', left, top, zIndex: 10,
-      width: TOOLTIP_W,
-      background: C.tooltipBg,
-      border: `1px solid ${C.border}`,
-      borderRadius: 6,
-      padding: '8px 10px',
-      fontSize: 11,
-      color: C.text2,
-      pointerEvents: 'none',
-      boxShadow: C.shadow,
-      boxSizing: 'border-box',
-    }}>
-      <div style={{
-        fontWeight: 700, color: C.text, marginBottom: 4, fontSize: 12,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
+    <div
+      className="fixed z-10 bg-tooltip-bg border border-border rounded-md px-2.5 py-2 text-[11px] text-text2 pointer-events-none box-border"
+      style={{
+        left, top,
+        width: TOOLTIP_W,
+        boxShadow: C.shadow,
+      }}
+    >
+      <div className="font-bold text-text mb-1 text-[12px] truncate">
         {node.legal_name}
       </div>
       <Row label="Revenue"   value={node.total_revenue_fmt} />
@@ -403,17 +388,10 @@ function NodeTooltip({ x, y, node }) {
 }
 
 function Row({ label, value }) {
-  const { C } = useTheme();
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '1px 0', minWidth: 0 }}>
-      <span style={{
-        color: C.text3, fontFamily: 'var(--font-geist-mono), monospace', fontSize: 10,
-        flexShrink: 0,
-      }}>{label}</span>
-      <span style={{
-        color: C.text, fontFamily: 'var(--font-geist-mono), monospace', fontSize: 10,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-      }}>{value ?? '—'}</span>
+    <div className="flex justify-between gap-2 py-px min-w-0">
+      <span className="text-text3 font-mono text-[10px] shrink-0">{label}</span>
+      <span className="text-text font-mono text-[10px] truncate min-w-0">{value ?? '—'}</span>
     </div>
   );
 }

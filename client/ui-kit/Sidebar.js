@@ -1,52 +1,48 @@
+import { useState, useEffect } from 'react';
 import { useTheme } from './theme';
 import Icons from './icons';
 
-// Hoisted static styles — never re-allocated.
-const ASIDE_BASE = {
-  width: 216, flexShrink: 0, height: '100vh', position: 'sticky', top: 0,
-  display: 'flex', flexDirection: 'column',
-};
-const BRAND_BOX = {
-  padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10,
-};
-const BRAND_LOGO = {
-  width: 30, height: 30, borderRadius: 8, flexShrink: 0,
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  color: '#fff',
-};
-const NAV_BOX = { flex: 1, padding: '10px 8px', overflowY: 'auto' };
-const SEC_HEADER = {
-  padding: '4px 8px 8px', fontSize: 9, fontWeight: 700,
-  textTransform: 'uppercase', letterSpacing: '.1em',
-};
-const ITEM_INNER = { display: 'flex', alignItems: 'center', gap: 9 };
-const FOOTER_BOX = {
-  padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: 8,
-};
-const TOGGLE_BTN = {
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  borderRadius: 6, padding: '6px 9px', cursor: 'pointer',
-  fontSize: 11, fontFamily: 'var(--font-geist-mono), monospace',
-  letterSpacing: '.04em', transition: 'background .1s, color .1s',
-};
+const COLLAPSE_KEY = 'ui-kit:sidebar-collapsed:v1';
+
 const DEFAULT_BRAND = { title: 'Dashboard', subtitle: '' };
 const EMPTY_ITEMS = [];
+
+const ChevronLeft = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M10 3l-5 5 5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+const ChevronRight = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+function readStoredCollapsed(fallback) {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const v = localStorage.getItem(COLLAPSE_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return fallback;
+}
 
 /**
  * Generic sidebar. Drive content via `items` prop.
  *
  * Props:
  *   brand:        { title, subtitle, icon? }
- *   items:        Array<{
- *                   id, label, icon?, accent?, tag?,
- *                   type?: 'section'  // divider + section header (uses `label`)
- *                 }>
+ *   items:        Array<{ id, label, icon?, accent?, tag?, type?: 'section' }>
  *   active:       current item id
  *   onSelect:     (id) => void
- *   loadingTabs:  { [id]: boolean }   optional
- *   dataCounts:   { [id]: number }    optional
- *   footer:       ReactNode           optional
+ *   loadingTabs:  { [id]: boolean }
+ *   dataCounts:   { [id]: number }
+ *   footer:       ReactNode
  *   showThemeToggle: bool (default true)
+ *   collapsed:    controlled flag (optional)
+ *   onToggleCollapse: controlled setter (optional)
+ *   defaultCollapsed: bool (default false) — uncontrolled init
  */
 export default function Sidebar({
   brand = DEFAULT_BRAND,
@@ -57,63 +53,93 @@ export default function Sidebar({
   dataCounts,
   footer,
   showThemeToggle = true,
+  collapsed: collapsedProp,
+  onToggleCollapse,
+  defaultCollapsed = false,
 }) {
-  const { C, theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme } = useTheme();
+
+  const isControlled = collapsedProp != null;
+  const [internalCollapsed, setInternalCollapsed] = useState(
+    () => readStoredCollapsed(defaultCollapsed),
+  );
+  const collapsed = isControlled ? collapsedProp : internalCollapsed;
+
+  useEffect(() => {
+    if (isControlled) return;
+    try { localStorage.setItem(COLLAPSE_KEY, internalCollapsed ? '1' : '0'); } catch {}
+  }, [internalCollapsed, isControlled]);
+
+  const handleToggle = () => {
+    if (onToggleCollapse) onToggleCollapse(!collapsed);
+    if (!isControlled) setInternalCollapsed(v => !v);
+  };
+
+  const widthCls = collapsed ? 'w-[60px]' : 'w-[216px]';
 
   return (
-    <aside style={{
-      ...ASIDE_BASE,
-      background: C.sidebarBg, borderRight: `1px solid ${C.border}`,
-    }}>
-      <div style={{ ...BRAND_BOX, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{
-          ...BRAND_LOGO,
-          background: `linear-gradient(135deg, ${C.primary} 0%, ${C.purple} 100%)`,
-          boxShadow: `0 0 12px ${C.primary}40`,
-        }}>
+    <aside
+      className={`${widthCls} shrink-0 sticky top-0 h-screen flex flex-col bg-sidebar-bg border-r border-border transition-[width] duration-200 ease-out`}
+    >
+      {/* Brand row — sits at top, toggle row sits below */}
+      <div
+        className={`flex items-center gap-2.5 border-b border-border ${
+          collapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'
+        }`}
+      >
+        <div
+          className="w-[30px] h-[30px] rounded-lg shrink-0 flex items-center justify-center text-white"
+          style={{
+            background: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-purple) 100%)',
+            boxShadow: '0 0 12px color-mix(in srgb, var(--color-primary) 25%, transparent)',
+          }}
+        >
           {brand.icon ?? Icons.logo}
         </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, letterSpacing: '-.01em' }}>
-            {brand.title}
-          </div>
-          {brand.subtitle ? (
-            <div style={{ fontSize: 10, color: C.text3, marginTop: 1 }}>
-              {brand.subtitle}
+        {!collapsed ? (
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-bold text-text tracking-tight truncate">
+              {brand.title}
             </div>
-          ) : null}
-        </div>
+            {brand.subtitle ? (
+              <div className="text-[10px] text-text3 mt-px truncate">{brand.subtitle}</div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      <nav style={NAV_BOX}>
+      {/* Toggle row — below brand, above nav sections */}
+      <div className={`${collapsed ? 'px-2 py-2 flex justify-center' : 'px-2 pt-2'}`}>
+        <CollapseButton collapsed={collapsed} onClick={handleToggle} />
+      </div>
+
+      <nav className="flex-1 px-2 py-2.5 overflow-y-auto">
         {items.map((item, idx) => {
           if (item.type === 'section') {
             return (
               <div key={item.id ?? `sec-${idx}`}>
                 {idx > 0 ? (
-                  <div style={{ height: 1, background: C.border, margin: '8px 8px 10px' }} />
+                  <div
+                    className={`h-px bg-border ${collapsed ? 'mx-1.5 my-2' : 'mx-2 my-2.5'}`}
+                  />
                 ) : null}
-                <div style={{ ...SEC_HEADER, color: C.text3 }}>
-                  {item.label}
-                </div>
+                {!collapsed ? (
+                  <div className="px-2 pt-1 pb-2 text-[9px] font-bold uppercase tracking-[0.1em] text-text3">
+                    {item.label}
+                  </div>
+                ) : null}
               </div>
             );
           }
-
-          const accent    = item.accent ?? C.primary;
-          const isActive  = active === item.id;
-          const count     = dataCounts?.[item.id];
-          const isLoading = loadingTabs?.[item.id];
 
           return (
             <SidebarItem
               key={item.id}
               item={item}
-              accent={accent}
-              isActive={isActive}
-              count={count}
-              isLoading={isLoading}
-              C={C}
+              isActive={active === item.id}
+              count={dataCounts?.[item.id]}
+              isLoading={loadingTabs?.[item.id]}
+              collapsed={collapsed}
               onSelect={onSelect}
             />
           );
@@ -121,50 +147,72 @@ export default function Sidebar({
       </nav>
 
       {(footer || showThemeToggle) ? (
-        <div style={{ ...FOOTER_BOX, borderTop: `1px solid ${C.border}` }}>
+        <div className="px-3 py-2.5 flex flex-col gap-2 border-t border-border">
           {showThemeToggle ? (
             <button
               type="button"
               onClick={toggleTheme}
               aria-label="Toggle theme"
-              style={{
-                ...TOGGLE_BTN,
-                background: C.surface2, border: `1px solid ${C.border}`,
-                color: C.text2,
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = C.text; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = C.text2; }}
+              title={collapsed ? `Theme: ${theme}` : undefined}
+              className={`flex items-center rounded-md cursor-pointer text-[11px] font-mono tracking-wider transition-colors bg-surface2 border border-border text-text2 hover:text-text ${
+                collapsed ? 'justify-center p-1.5' : 'justify-between px-2.5 py-1.5'
+              }`}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: C.primary, boxShadow: `0 0 6px ${C.primary}80`,
-                  flexShrink: 0,
-                }} />
-                <span style={{ textTransform: 'uppercase', fontWeight: 700 }}>{theme}</span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="w-2 h-2 rounded-full bg-primary shrink-0"
+                  style={{ boxShadow: '0 0 6px color-mix(in srgb, var(--color-primary) 50%, transparent)' }}
+                />
+                {!collapsed ? (
+                  <span className="uppercase font-bold">{theme}</span>
+                ) : null}
               </span>
-              <span style={{ color: C.text3 }}>›</span>
+              {!collapsed ? <span className="text-text3">›</span> : null}
             </button>
           ) : null}
-          {footer}
+          {!collapsed ? footer : null}
         </div>
       ) : null}
     </aside>
   );
 }
 
-// Extracted to keep map body lean and avoid in-component component definition.
-function SidebarItem({ item, accent, isActive, count, isLoading, C, onSelect }) {
+function CollapseButton({ collapsed, onClick }) {
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label="Expand sidebar"
+        title="Expand sidebar"
+        className="w-[26px] h-[26px] rounded-md flex items-center justify-center bg-surface2 border-0 text-text2 cursor-pointer shrink-0 transition-colors hover:text-text hover:bg-hover-bg"
+      >
+        {ChevronRight}
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Collapse sidebar"
+      className="w-full flex items-center gap-2.5 rounded-md border-0 bg-surface2 cursor-pointer text-left px-2.5 py-1.5 text-text2 hover:bg-hover-bg hover:text-text transition-colors"
+    >
+      <span className="shrink-0 opacity-65">{ChevronLeft}</span>
+      <span className="text-[13px] font-normal">Collapse</span>
+    </button>
+  );
+}
+
+function SidebarItem({ item, isActive, count, isLoading, collapsed, onSelect }) {
+  const { C } = useTheme();
+  const accent = item.accent ?? C.primary;
+
   const handleClick = () => onSelect?.(item.id);
-  const handleEnter = (e) => {
-    if (isActive) return;
-    e.currentTarget.style.background = C.hoverBg;
-    e.currentTarget.style.color = C.text;
-  };
-  const handleLeave = (e) => {
-    if (isActive) return;
-    e.currentTarget.style.background = 'transparent';
-    e.currentTarget.style.color = C.text2;
+
+  const baseStyle = {
+    background: isActive ? `${accent}1A` : 'transparent',
+    color: isActive ? accent : undefined,
   };
 
   return (
@@ -172,47 +220,53 @@ function SidebarItem({ item, accent, isActive, count, isLoading, C, onSelect }) 
       type="button"
       onClick={handleClick}
       aria-current={isActive ? 'page' : undefined}
-      style={{
-        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '7px 10px', borderRadius: 7, border: 'none', cursor: 'pointer', marginBottom: 2,
-        background: isActive ? `${accent}1A` : 'transparent',
-        color: isActive ? accent : C.text2,
-        transition: 'background .1s, color .1s',
-        textAlign: 'left',
-        touchAction: 'manipulation',
-      }}
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
+      title={collapsed ? item.label : undefined}
+      className={`w-full flex items-center rounded-md border-0 cursor-pointer mb-0.5 text-left transition-colors ${
+        collapsed ? 'justify-center py-2' : 'justify-between px-2.5 py-1.5'
+      } ${isActive ? '' : 'text-text2 hover:bg-hover-bg hover:text-text'}`}
+      style={baseStyle}
     >
-      <div style={ITEM_INNER}>
+      <div
+        className={`flex items-center gap-2.5 min-w-0 ${collapsed ? 'justify-center w-full' : 'justify-start'}`}
+      >
         {item.icon ? (
-          <span style={{ opacity: isActive ? 1 : 0.55, flexShrink: 0 }}>{item.icon}</span>
+          <span className="shrink-0" style={{ opacity: isActive ? 1 : 0.65 }}>
+            {item.icon}
+          </span>
         ) : null}
-        <span style={{ fontSize: 13, fontWeight: isActive ? 600 : 400 }}>{item.label}</span>
+        {!collapsed ? (
+          <span className={`text-[13px] ${isActive ? 'font-semibold' : 'font-normal'}`}>
+            {item.label}
+          </span>
+        ) : null}
       </div>
-      {item.tag ? (
-        <span style={{
-          fontSize: 9, fontWeight: 700,
-          fontFamily: 'var(--font-geist-mono), monospace', flexShrink: 0,
-          color: isActive ? '#fff' : accent,
-          background: isActive ? accent : `${accent}18`,
-          border: `1px solid ${accent}40`,
-          borderRadius: 3, padding: '1px 5px', letterSpacing: '.06em',
-        }}>{item.tag}</span>
-      ) : isLoading ? (
-        <div style={{
-          width: 6, height: 6, borderRadius: '50%',
-          background: C.warning, animation: 'pulse-dot 1s ease-in-out infinite',
-          flexShrink: 0,
-        }} />
-      ) : count != null ? (
-        <span style={{
-          fontSize: 10, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0,
-          color: isActive ? accent : C.text3,
-          background: isActive ? `${accent}1A` : C.surface2,
-          border: `1px solid ${isActive ? `${accent}30` : C.border}`,
-          borderRadius: 4, padding: '1px 5px',
-        }}>{count}</span>
+      {!collapsed && item.tag ? (
+        <span
+          className="text-[9px] font-bold font-mono shrink-0 rounded px-1.5 py-px tracking-wider"
+          style={{
+            color: isActive ? '#fff' : accent,
+            background: isActive ? accent : `${accent}18`,
+            border: `1px solid ${accent}40`,
+          }}
+        >
+          {item.tag}
+        </span>
+      ) : !collapsed && isLoading ? (
+        <div
+          className="w-1.5 h-1.5 rounded-full bg-warning shrink-0"
+          style={{ animation: 'pulse-dot 1s ease-in-out infinite' }}
+        />
+      ) : !collapsed && count != null ? (
+        <span
+          className="text-[10px] font-bold font-mono shrink-0 rounded px-1.5 py-px"
+          style={{
+            color: isActive ? accent : 'var(--color-text3)',
+            background: isActive ? `${accent}1A` : 'var(--color-surface2)',
+            border: `1px solid ${isActive ? `${accent}30` : 'var(--color-border)'}`,
+          }}
+        >
+          {count}
+        </span>
       ) : null}
     </button>
   );

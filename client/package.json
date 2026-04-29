@@ -14,7 +14,9 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.2.4",
     "vite": "^5.4.10"
   }
 }
