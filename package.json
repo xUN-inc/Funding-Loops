@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "kill": "kill-port 3000 5173",
+    "postinstall": "cd client && npm install",
     "start": "npm run kill --silent && concurrently -n server,client -c blue,magenta \"node server.js\" \"npm run client\"",
     "server": "npm run kill --silent && node server.js",
     "client": "cd client && npm run dev",

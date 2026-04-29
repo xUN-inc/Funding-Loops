@@ -9,9 +9,23 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- Database ---
+// Pool max raised from default 10 -> 25 because /api/loop/:id fans out 7
+// parallel queries; with pre-warm and memo gen running concurrently the
+// default pool was the bottleneck (queries queueing for connections, not
+// the DB itself).
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'YOUR_CONNECTION_STRING',
   ssl: { rejectUnauthorized: false },
+  max: parseInt(process.env.PG_POOL_MAX, 10) || 25,
+  idleTimeoutMillis: 30000,
+});
+
+// Hosted Postgres (e.g. Render free tier) periodically drops idle connections.
+// Without this handler, the 'error' event from an idle client bubbles up as
+// an unhandled rejection and crashes the process. The pool will create a
+// fresh connection on the next query.
+pool.on('error', (err) => {
+  console.warn('[pg] idle client error (recovered):', err.message);
 });
 
 // --- Gemini (Google) ---
@@ -887,20 +901,28 @@ app.get('/api/loops', async (req, res) => {
 // ============================================================
 // GET /api/loop/:id — Full loop detail with financials + federal grants
 // ============================================================
-app.get('/api/loop/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT
-        pc.id, pc.hops, pc.total_flow, pc.bottleneck_amt,
-        pc.path_display, pc.min_year, pc.max_year, pc.tier
-      FROM cra.partitioned_cycles pc
-      WHERE pc.id = $1
-    `, [req.params.id]);
+// Loop-detail cache. /api/loop/:id runs 7 parallel queries against the remote
+// Postgres on every click — cold latency ~1-2s. Cache for 30 min so demo
+// clicks are instant after the first load (and pre-warmed at startup for the
+// top 20). NULL_SENTINEL distinguishes "not in cache" from "known 404".
+const loopDetailCache = new Map();   // id -> { payload, at }
+const loopDetailInflight = new Map(); // id -> Promise (dedupe concurrent loaders)
+const LOOP_DETAIL_TTL_MS = 30 * 60 * 1000;
+const LOOP_DETAIL_NOT_FOUND = Symbol('not_found');
 
-    if (!rows.length) return res.status(404).json({ error: 'Loop not found' });
+async function buildLoopDetail(id) {
+  const { rows } = await pool.query(`
+    SELECT
+      pc.id, pc.hops, pc.total_flow, pc.bottleneck_amt,
+      pc.path_display, pc.min_year, pc.max_year, pc.tier
+    FROM cra.partitioned_cycles pc
+    WHERE pc.id = $1
+  `, [id]);
 
-    const loop = rows[0];
-    const bns = parseBNs(loop.path_display);
+  if (!rows.length) return LOOP_DETAIL_NOT_FOUND;
+
+  const loop = rows[0];
+  const bns = parseBNs(loop.path_display);
 
     // path_display closes the cycle (e.g. A→B→C→A), so bns has the
     // first BN repeated at the end. Dedupe for the leakage waterfall
@@ -991,7 +1013,7 @@ app.get('/api/loop/:id', async (req, res) => {
       edges.push({ source: bns[bns.length - 1], target: bns[0] });
     }
 
-    res.json({
+    return {
       loop: {
         id: loop.id,
         hops: loop.hops,
@@ -1010,7 +1032,38 @@ app.get('/api/loop/:id', async (req, res) => {
       federal_grants: fedDetail,
       directors: directorContext,
       leakage,
-    });
+    };
+}
+
+async function getLoopDetail(id) {
+  const key = String(id);
+  const now = Date.now();
+  const hit = loopDetailCache.get(key);
+  if (hit && now - hit.at < LOOP_DETAIL_TTL_MS) return hit.payload;
+
+  // Dedupe: if another caller is already building the same id, await its promise.
+  if (loopDetailInflight.has(key)) return loopDetailInflight.get(key);
+
+  const promise = (async () => {
+    try {
+      const payload = await buildLoopDetail(id);
+      loopDetailCache.set(key, { payload, at: Date.now() });
+      return payload;
+    } finally {
+      loopDetailInflight.delete(key);
+    }
+  })();
+  loopDetailInflight.set(key, promise);
+  return promise;
+}
+
+app.get('/api/loop/:id', async (req, res) => {
+  try {
+    const payload = await getLoopDetail(req.params.id);
+    if (payload === LOOP_DETAIL_NOT_FOUND) {
+      return res.status(404).json({ error: 'Loop not found' });
+    }
+    res.json(payload);
   } catch (err) {
     console.error('GET /api/loop/:id error:', err);
     res.status(500).json({ error: err.message });
@@ -1773,7 +1826,13 @@ async function startup() {
     console.log(`Follow The Money running at http://localhost:${PORT}`);
   });
 
-  // Step 4: Pre-generate memo #1 (top loop) before kicking off rest
+  // Step 4: Pre-warm loop-detail cache. Runs in background with concurrency=3
+  // so it doesn't exhaust the pg connection pool (default 10) — each loop
+  // fires 7 parallel sub-queries, so 3 in flight = ~21 simultaneous queries,
+  // leaving headroom for memo queries and live user clicks.
+  prewarmLoopDetails(cachedLoops).catch(err => console.warn('pre-warm failed:', err.message));
+
+  // Step 5: Pre-generate memo #1 (top loop) before kicking off rest
   if (cachedLoops.length > 0) {
     console.log('Pre-generating memo 1/' + cachedLoops.length + ' (top loop)...');
     await generateMemo(cachedLoops[0].id);
@@ -1781,14 +1840,37 @@ async function startup() {
     console.log(`Memo 1 ready — verdict: ${memoCache.get(String(cachedLoops[0].id))?.verdict}`);
   }
 
-  // Step 5: Pre-generate memos 2-20 asynchronously (max 5 concurrent)
+  // Step 6: Pre-generate memos 2-20 asynchronously (max 10 concurrent — Gemini
+  // Flash handles this comfortably and ~halves total wall-clock pregen time).
   if (cachedLoops.length > 1) {
     preGenerateRemaining(cachedLoops.slice(1));
   }
 }
 
+async function prewarmLoopDetails(loops) {
+  const concurrency = 3;
+  const start = Date.now();
+  let idx = 0;
+  let done = 0;
+  async function worker() {
+    while (idx < loops.length) {
+      const loop = loops[idx++];
+      try {
+        await getLoopDetail(loop.id);
+      } catch (err) {
+        console.warn(`pre-warm loop ${loop.id} failed:`, err.message);
+      }
+      done++;
+    }
+  }
+  const workers = [];
+  for (let w = 0; w < Math.min(concurrency, loops.length); w++) workers.push(worker());
+  await Promise.all(workers);
+  console.log(`Loop-detail cache pre-warmed for ${done} loops in ${Date.now() - start}ms`);
+}
+
 async function preGenerateRemaining(loops) {
-  const concurrency = 5;
+  const concurrency = 10;
   let idx = 0;
 
   async function worker() {
