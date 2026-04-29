@@ -32,8 +32,8 @@ jobs:
         with:
           host:     ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key:      ${{ secrets.SSH_PRIVATE_KEY }}
-          port:     ${{ secrets.SSH_PORT || 22 }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port:     22
           # Single command. The script handles pull/install/build/restart.
           # `set -e` is inside the script; `script_stop: true` makes the
           # action fail fast if any step inside the SSH session errors.
