@@ -50,10 +50,16 @@ function buildLoopParams(settings, { offset = 0, isInitial = true } = {}) {
   };
 }
 
+const GATE_KEY = 'loops:gate-passed:v1';
+
 export default function Loops() {
   const { C } = useTheme();
   const [settings, setSettings]       = useState(loadSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gateOpen, setGateOpen]       = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return sessionStorage.getItem(GATE_KEY) !== '1';
+  });
   const [loops, setLoops]             = useState(null);
   const [pagination, setPagination]   = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -84,6 +90,20 @@ export default function Loops() {
     saveSettings(next);
     setSettingsOpen(false);
     setSelected(null);
+  };
+
+  const handleApplyGate = (next, searchStr = '') => {
+    setSettings(next);
+    saveSettings(next);
+    setSelected(null);
+    setQuery(searchStr);
+    setGateOpen(false);
+    try { sessionStorage.setItem(GATE_KEY, '1'); } catch {}
+  };
+
+  const reopenGate = () => {
+    setGateOpen(true);
+    try { sessionStorage.removeItem(GATE_KEY); } catch {}
   };
 
   const handleLoadMore = async () => {
@@ -142,6 +162,10 @@ export default function Loops() {
     return rows;
   }, [loops, query, settings.verdicts, verdicts]);
 
+  if (gateOpen) {
+    return <LoopsGate settings={settings} onApply={handleApplyGate} />;
+  }
+
   if (err)  return <ErrorState message={err} />;
   if (!loops) return <LoadingState message="Loading loops…" />;
 
@@ -152,12 +176,12 @@ export default function Loops() {
       <div className="mb-6 pb-[18px] border-b border-border">
         <div className="flex items-end justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <div
-              className="text-[9px] font-bold text-primary uppercase font-mono mb-[7px]"
-              style={{ letterSpacing: '.14em', opacity: 0.9 }}
-            >
-              ANALYSIS
-            </div>
+            <Breadcrumb
+              items={[
+                { label: 'Filters', onClick: reopenGate },
+                { label: 'Funding Loops' },
+              ]}
+            />
             <div className="flex items-center gap-2.5 mb-1">
               <div
                 className="w-1 h-[22px] rounded-sm shrink-0 bg-primary"
@@ -234,6 +258,7 @@ export default function Loops() {
             verdicts={verdicts}
             selected={selected}
             onSelect={setSelected}
+            onReopenGate={reopenGate}
           />
         </div>
 
@@ -286,7 +311,7 @@ export default function Loops() {
 
 function LoopsPanel({
   loops, total, poolTotal, hasMore, loadingMore, onLoadMore,
-  query, onQuery, verdicts, selected, onSelect,
+  query, onQuery, verdicts, selected, onSelect, onReopenGate,
 }) {
   return (
     <div className="bg-surface border border-border rounded-[10px] overflow-hidden flex flex-col self-stretch min-h-0">
@@ -298,6 +323,19 @@ function LoopsPanel({
             {poolTotal > total ? <span className="text-text3"> · {poolTotal} available</span> : null}
           </div>
         </div>
+        {onReopenGate ? (
+          <button
+            type="button"
+            onClick={onReopenGate}
+            aria-label="Change filters"
+            title="Change filters"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md cursor-pointer bg-surface border border-border text-text2 hover:text-text hover:bg-hover-bg"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 4h18l-7 9v6l-4 2v-8L3 4z" />
+            </svg>
+          </button>
+        ) : null}
       </div>
       <div className="p-3.5 flex flex-col gap-3 flex-1 min-h-0">
         <div className="shrink-0">
@@ -335,6 +373,201 @@ function LoopsPanel({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const FLAG_OPTIONS = [
+  { value: 'ALL',      label: 'All',      tone: 'gray'   },
+  { value: 'SCRUTINY', label: 'Scrutiny', tone: 'yellow' },
+  { value: 'RED FLAG', label: 'Red Flag', tone: 'red'    },
+];
+
+const TOP_OPTIONS = [10, 20, 30];
+
+const CATEGORY_OPTIONS = [
+  { value: 'RC', label: 'RC — Registered Charity' },
+  { value: 'TC', label: 'TC — Tax Charity' },
+  { value: 'LC', label: 'LC — Local Charity' },
+];
+
+function Breadcrumb({ items }) {
+  return (
+    <nav
+      aria-label="Breadcrumb"
+      className="flex items-center gap-1.5 mb-[7px] text-[10px] font-bold font-mono uppercase"
+      style={{ letterSpacing: '.12em' }}
+    >
+      {items.map((item, idx) => {
+        const isLast = idx === items.length - 1;
+        const clickable = !isLast && typeof item.onClick === 'function';
+        return (
+          <span key={idx} className="flex items-center gap-1.5">
+            {clickable ? (
+              <button
+                type="button"
+                onClick={item.onClick}
+                className="text-text3 hover:text-primary cursor-pointer"
+              >
+                {idx === 0 ? '← ' : ''}{item.label}
+              </button>
+            ) : (
+              <span className={isLast ? 'text-primary' : 'text-text3'}>
+                {item.label}
+              </span>
+            )}
+            {!isLast ? <span className="text-text3 opacity-50">/</span> : null}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
+function LoopsGate({ settings, onApply }) {
+  const { C } = useTheme();
+  const initialFlag =
+    settings.verdicts.length === 1 ? settings.verdicts[0] : 'ALL';
+  const initialTop = TOP_OPTIONS.includes(settings.initialFetchSize)
+    ? settings.initialFetchSize
+    : 10;
+
+  const [flag, setFlag] = useState(initialFlag);
+  const [topN, setTopN] = useState(initialTop);
+  const [category, setCategory] = useState('');
+  const [search, setSearch] = useState('');
+
+  const submit = () => {
+    onApply(
+      {
+        ...settings,
+        verdicts: flag === 'ALL' ? [] : [flag],
+        initialFetchSize: topN,
+        pageSize: topN,
+      },
+      search.trim(),
+    );
+  };
+
+  const onSearchKey = (e) => {
+    if (e.key === 'Enter') submit();
+  };
+
+  return (
+    <div className="max-w-[760px] mx-auto">
+      <div className="mb-6 pb-[18px] border-b border-border">
+        <Breadcrumb items={[{ label: 'Funding Loops' }, { label: 'Filters' }]} />
+        <div className="flex items-center gap-2.5 mb-1">
+          <div
+            className="w-1 h-[22px] rounded-sm shrink-0 bg-primary"
+            style={{ boxShadow: `0 0 8px ${C.primary}55` }}
+          />
+          <h1
+            className="text-[21px] font-bold text-text m-0"
+            style={{ letterSpacing: '-.02em' }}
+          >
+            Funding Loops
+          </h1>
+        </div>
+        <p className="text-[13px] text-text2 ml-3.5 mt-0 mb-0">
+          Pick filters before viewing loops. Choose a charity to drill into the network.
+        </p>
+      </div>
+
+      <SectionCard title="Filters" subtitle="Narrow the loop set">
+        <div className="flex flex-col gap-6 py-1">
+          <div className="grid grid-cols-3 gap-3">
+            <GateSelect
+              label="Flags"
+              value={flag}
+              onChange={setFlag}
+              options={FLAG_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            />
+            <GateSelect
+              label="Charity"
+              value={String(topN)}
+              onChange={(v) => setTopN(Number(v))}
+              options={TOP_OPTIONS.map(n => ({ value: String(n), label: `TOP ${n}` }))}
+            />
+            <GateSelect
+              label="Category"
+              value={category}
+              onChange={setCategory}
+              disabled
+              placeholder="No data yet"
+              options={CATEGORY_OPTIONS}
+            />
+          </div>
+
+          <GateGroup label="Search" help="Match by org name or short label.">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={onSearchKey}
+                placeholder="e.g. foundation name…"
+                className="flex-1 bg-input-bg border border-border rounded-md px-3 py-2 text-[13px] font-mono text-text focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+              />
+              <button
+                type="button"
+                onClick={submit}
+                className="px-3.5 py-2 text-[11px] font-bold font-mono uppercase tracking-wider rounded-md border border-border bg-surface2 text-text2 hover:text-text hover:bg-hover-bg cursor-pointer"
+              >
+                Search
+              </button>
+            </div>
+          </GateGroup>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-border">
+            <button
+              type="button"
+              onClick={submit}
+              className="px-4 py-2 text-[11px] font-bold font-mono uppercase tracking-wider rounded-md border border-primary bg-primary text-white hover:opacity-90 cursor-pointer"
+            >
+              View Loops
+            </button>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+function GateSelect({ label, value, onChange, options, disabled, placeholder }) {
+  return (
+    <div>
+      <div className="text-[10px] font-bold font-mono uppercase tracking-[0.12em] text-text2 mb-1.5">
+        {label}
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        title={disabled ? placeholder : undefined}
+        className="w-full bg-input-bg border border-border rounded-md px-3 py-2 text-[13px] font-mono text-text focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {disabled && placeholder ? (
+          <option value="">{placeholder}</option>
+        ) : null}
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function GateGroup({ label, help, children }) {
+  return (
+    <div>
+      <div className="text-[10px] font-bold font-mono uppercase tracking-[0.12em] text-text2 mb-2">
+        {label}
+      </div>
+      {children}
+      {help ? (
+        <div className="text-[11px] text-text3 mt-2 leading-snug">{help}</div>
+      ) : null}
     </div>
   );
 }
