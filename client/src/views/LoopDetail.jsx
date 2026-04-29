@@ -100,11 +100,11 @@ function WaterfallBars({ rows }) {
   const { C } = useTheme();
 
   const SEGMENTS = [
-    { key: 'program_share',     label: 'Programs',              color: C.success },
-    { key: 'gifts_share',       label: 'Gifts to other charities', color: C.cyan },
-    { key: 'comp_share',        label: 'Compensation',          color: C.warning },
-    { key: 'admin_share',       label: 'Admin',                 color: C.danger },
-    { key: 'fundraising_share', label: 'Fundraising',           color: C.purple },
+    { key: 'program_amt',     label: 'Programs',                 color: C.success },
+    { key: 'gifts_amt',       label: 'Gifts to other charities', color: C.cyan },
+    { key: 'comp_amt',        label: 'Compensation',             color: C.warning },
+    { key: 'admin_amt',       label: 'Admin',                    color: C.danger },
+    { key: 'fundraising_amt', label: 'Fundraising',              color: C.purple },
   ];
 
   return (
@@ -162,6 +162,25 @@ function BarStack({ segments, row, noDataColor, bg }) {
     );
   }
   const total = segments.reduce((s, seg) => s + (Number(row[seg.key]) || 0), 0);
+  // Zero dollars at this hop (upstream charities already absorbed the
+  // bottleneck dollar). Render a flat track so the row still aligns
+  // visually but no segments draw.
+  if (total <= 0) {
+    return (
+      <div
+        className="h-[18px] rounded-sm flex items-center"
+        style={{ background: bg, border: `1px dashed ${noDataColor}30` }}
+        title="$0 reached this hop"
+      >
+        <span
+          className="text-[10px] font-mono px-2"
+          style={{ color: `${noDataColor}` }}
+        >
+          $0 reached this hop
+        </span>
+      </div>
+    );
+  }
   return (
     <div
       className="h-[18px] rounded-sm overflow-hidden flex"
@@ -176,12 +195,16 @@ function BarStack({ segments, row, noDataColor, bg }) {
             key={seg.key}
             className="h-full"
             style={{ width: `${pct}%`, background: seg.color }}
-            title={`${seg.label}: ${(v * 100).toFixed(1)}%`}
+            title={`${seg.label}: ${formatPct(v / total)}`}
           />
         );
       })}
     </div>
   );
+}
+
+function formatPct(frac) {
+  return `${(frac * 100).toFixed(1)}%`;
 }
 
 function Legend({ segments, noDataColor }) {

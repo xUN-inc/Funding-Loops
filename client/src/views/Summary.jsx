@@ -42,16 +42,12 @@ export default function Summary() {
 
   useEffect(() => {
     api.summary().then(setData).catch(e => setErr(e.message));
-  }, []);
-
-  useEffect(() => {
-    if (!data) return;
     setNarrLoading(true);
     api.summaryNarrative()
       .then(setNarrative)
       .catch(e => setNarrErr(e.message))
       .finally(() => setNarrLoading(false));
-  }, [data]);
+  }, []);
 
   if (err)   return <ErrorState message={err} />;
   if (!data) return <LoadingState message="Loading summary…" />;

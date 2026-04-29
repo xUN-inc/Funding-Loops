@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useTheme } from '../../ui-kit';
+import DirectorPopover from './DirectorPopover.jsx';
 
 /**
  * Loop snapshot — controlling directors paired with the three KPIs
@@ -6,6 +8,7 @@ import { useTheme } from '../../ui-kit';
  */
 export default function VerdictCluster({ loop, leakage, directors = [] }) {
   const { C } = useTheme();
+  const [openDir, setOpenDir] = useState(null); // { name, anchor: { x, y } }
 
   const sev = loop.worst_classification;
   const accent =
@@ -96,7 +99,13 @@ export default function VerdictCluster({ loop, leakage, directors = [] }) {
         <div className="p-3.5 flex flex-col">
           {directors.length ? (
             <div className="flex flex-col gap-1.5 overflow-y-auto max-h-[340px] pr-1">
-              {directors.map(d => <DirectorRow key={d.director_name} director={d} />)}
+              {directors.map(d => (
+                <DirectorRow
+                  key={d.director_name}
+                  director={d}
+                  onOpen={(anchor) => setOpenDir({ name: d.director_name, anchor })}
+                />
+              ))}
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-text3 text-[12px] text-center px-4">
@@ -105,6 +114,14 @@ export default function VerdictCluster({ loop, leakage, directors = [] }) {
           )}
         </div>
       </div>
+
+      {openDir ? (
+        <DirectorPopover
+          name={openDir.name}
+          anchor={openDir.anchor}
+          onClose={() => setOpenDir(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -138,7 +155,7 @@ function MetricBand({ label, value, sub, accent }) {
   );
 }
 
-function DirectorRow({ director }) {
+function DirectorRow({ director, onOpen }) {
   const { C } = useTheme();
   const initials = director.director_name
     .split(/\s+/)
@@ -147,13 +164,23 @@ function DirectorRow({ director }) {
     .map(p => p[0])
     .join('')
     .toUpperCase();
+  const handleClick = (e) => {
+    if (!onOpen) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    onOpen({ x: rect.left, y: rect.bottom });
+  };
   return (
-    <div
-      className="flex items-center gap-2 p-2 rounded-md"
+    <button
+      type="button"
+      onClick={handleClick}
+      title="View director profile"
+      className="flex items-center gap-2 p-2 rounded-md text-left cursor-pointer transition-colors"
       style={{
         background: `${C.danger}0C`,
         border: `1px solid ${C.danger}28`,
       }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = `${C.danger}18`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = `${C.danger}0C`; }}
     >
       <span
         className="inline-flex items-center justify-center w-7 h-7 rounded-full text-[10px] font-bold font-mono shrink-0"
@@ -184,7 +211,7 @@ function DirectorRow({ director }) {
       >
         {director.boards_in_cycle}×
       </span>
-    </div>
+    </button>
   );
 }
 
