@@ -1,0 +1,29 @@
+{
+  "name": "ui-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drop-in React UI kit. Sidebar, primitives, charts. No framework lock-in.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".":            "./index.js",
+    "./theme":      "./theme.js",
+    "./icons":      "./icons.js",
+    "./dataviz":    "./dataviz.js",
+    "./Sidebar":    "./Sidebar.js",
+    "./globals.css": "./globals.css",
+    "./components/*": "./components/*.js",
+    "./charts/*":   "./charts/*.js"
+  },
+  "sideEffects": ["./globals.css"],
+  "peerDependencies": {
+    "react":     ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "recharts": { "optional": true }
+  },
+  "optionalDependencies": {
+    "recharts": ">=2"
+  }
+}

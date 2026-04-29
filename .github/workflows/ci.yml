@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Manual trigger from the Actions tab.
+  workflow_dispatch:
+
+# Cancel an in-flight run for the same ref when a newer commit lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, syntax-check, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install server deps
+        run: npm ci
+
+      - name: Syntax-check server.js
+        run: node --check server.js
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci
+
+      - name: Build React client
+        working-directory: client
+        run: npm run build
+
+      - name: Verify build output exists
+        run: |
+          test -f public/index.html || (echo "::error::client build did not produce public/index.html" && exit 1)
+          test -d public/assets || (echo "::error::client build did not produce public/assets" && exit 1)
+
+      - name: Upload built client (artifact)
+        if: matrix.node-version == '22.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-build
+          path: |
+            public/index.html
+            public/assets
+          retention-days: 7

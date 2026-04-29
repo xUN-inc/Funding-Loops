@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Public Money Recipients — Follow The Money</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #f5f6f8;
+      --surface: #ffffff;
+      --surface-2: #fafbfc;
+      --surface-hover: #f1f3f6;
+      --border: #d8dce2;
+      --border-subtle: #e8eaef;
+      --border-strong: #b8bec7;
+      --text: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --text-faint: #94a3b8;
+      --accent: #1e3a5f;
+      --accent-hover: #15294a;
+      --accent-bg: #ebf0f7;
+      --accent-border: #c7d6ea;
+      --critical: #991b1b;
+      --critical-bg: #fef2f2;
+      --critical-border: #fecaca;
+      --warning: #92400e;
+      --warning-bg: #fefce8;
+      --warning-border: #fde68a;
+      --success: #166534;
+      --success-bg: #f0fdf4;
+      --success-border: #bbf7d0;
+      --shadow-tooltip: 0 6px 20px rgba(15,23,42,0.10), 0 0 0 1px rgba(15,23,42,0.04);
+      --radius: 4px;
+      --topbar-h: 56px;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+    }
+
+    .num, .mono {
+      font-family: var(--font-mono);
+      font-feature-settings: "tnum" on, "lnum" on;
+      letter-spacing: -0.1px;
+    }
+
+    html { font-size: 14px; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ========== TOP BAR ========== */
+    #topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      height: var(--topbar-h);
+      background: var(--accent);
+      color: #ffffff;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--accent-hover);
+    }
+    .topbar-left { display: flex; align-items: center; gap: 14px; }
+    .topbar-mark {
+      width: 28px; height: 28px;
+      border: 1px solid rgba(255,255,255,0.35);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono);
+      font-size: 11px; font-weight: 600; color: #ffffff;
+      letter-spacing: 0.5px;
+    }
+    .topbar-title { display: flex; flex-direction: column; line-height: 1.15; }
+    .topbar-title .product {
+      font-size: 13px; font-weight: 600; color: #ffffff;
+      letter-spacing: 0.2px; text-transform: uppercase;
+    }
+    .topbar-title .agency {
+      font-size: 10.5px; font-weight: 400;
+      color: rgba(255,255,255,0.62);
+      letter-spacing: 0.4px; margin-top: 2px; text-transform: uppercase;
+    }
+    .topbar-nav { display: flex; gap: 8px; }
+    .topbar-nav a {
+      color: rgba(255,255,255,0.78);
+      text-decoration: none;
+      font-size: 11.5px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      padding: 6px 12px;
+      border-radius: 2px;
+      transition: background 0.12s, color 0.12s;
+    }
+    .topbar-nav a:hover { background: rgba(255,255,255,0.08); color: #fff; }
+    .topbar-nav a.active {
+      color: #fff;
+      background: rgba(255,255,255,0.12);
+      font-weight: 600;
+    }
+
+    /* ========== MAIN ========== */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ========== LEFT: search + leaderboard ========== */
+    #left-panel {
+      width: 440px;
+      min-width: 440px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .left-header {
+      padding: 16px 20px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--surface-2);
+      flex-shrink: 0;
+    }
+    .left-header h2 {
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 1.0px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .search-box {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    .search-box:focus { border-color: var(--accent); }
+    .search-hint {
+      font-size: 10.5px;
+      color: var(--text-faint);
+      margin-top: 8px;
+      letter-spacing: 0.2px;
+    }
+
+    .recipients-list {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .recipient-item {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: background 0.12s ease;
+    }
+    .recipient-item:hover { background: var(--surface-hover); }
+    .recipient-item.active {
+      background: var(--accent-bg);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .recipient-rank {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-feature-settings: "tnum" on;
+      font-size: 10px;
+      color: var(--text-faint);
+      width: 20px;
+      margin-right: 8px;
+    }
+    .recipient-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.1px;
+      line-height: 1.35;
+      margin-bottom: 4px;
+      display: inline;
+    }
+    .recipient-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .recipient-amt {
+      font-family: var(--font-mono);
+      font-feature-settings: "tnum" on;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.2px;
+      margin-right: 6px;
+    }
+    .src-chip {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 2px;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      vertical-align: middle;
+      line-height: 1.5;
+    }
+    .src-chip.fed {
+      background: var(--accent-bg);
+      color: var(--accent);
+      border: 1px solid var(--accent-border);
+    }
+    .src-chip.ab {
+      background: var(--warning-bg);
+      color: var(--warning);
+      border: 1px solid var(--warning-border);
+    }
+
+    /* ========== RIGHT: profile ========== */
+    #right-panel {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--bg);
+      padding: 20px 28px 32px;
+    }
+    #profile-empty {
+      color: var(--text-faint);
+      font-size: 12px;
+      text-align: center;
+      padding: 80px 20px;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+    .profile-header {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    .profile-name {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.3px;
+      line-height: 1.3;
+      margin-bottom: 6px;
+    }
+    .profile-loc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .profile-totals {
+      display: flex;
+      gap: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .total-block {
+      flex: 1;
+    }
+    .total-label {
+      font-size: 9.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .total-value {
+      font-family: var(--font-mono);
+      font-feature-settings: "tnum" on;
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.4px;
+      line-height: 1.1;
+    }
+    .total-value.muted { color: var(--text-faint); }
+    .total-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 12px;
+    }
+    .section h3 {
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 1.0px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .section.empty h3 { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+
+    .grant-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .grant-table th {
+      text-align: left;
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 6px 10px 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      white-space: nowrap;
+    }
+    .grant-table td {
+      padding: 8px 10px 8px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      font-size: 12px;
+      vertical-align: top;
+    }
+    .grant-table td.amt {
+      font-family: var(--font-mono);
+      font-feature-settings: "tnum" on;
+      color: var(--text);
+      font-weight: 600;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .grant-table td.dept {
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .grant-table td.title {
+      max-width: 320px;
+      line-height: 1.4;
+    }
+
+    .skel-bar {
+      height: 14px;
+      background: var(--border-subtle);
+      border-radius: 2px;
+      margin-bottom: 8px;
+    }
+    .skel-bar.short { width: 60%; }
+
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e0; border: 2px solid var(--bg); }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    @media (max-width: 767px) {
+      body { height: auto; overflow-y: auto; }
+      #main { flex-direction: column; overflow: visible; }
+      #left-panel {
+        width: 100%; min-width: 0;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .left-header { position: sticky; top: 0; z-index: 1; }
+      .recipients-list { max-height: 50vh; overflow-y: auto; }
+      #right-panel { padding: 16px; }
+      .profile-totals { flex-direction: column; gap: 12px; }
+      .total-block { padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle); }
+      .total-block:last-child { border-bottom: none; }
+      .grant-table th:nth-child(2),
+      .grant-table td:nth-child(2) { display: none; }
+      .topbar-title .product { font-size: 12px; }
+      .topbar-title .agency { display: none; }
+      .topbar-nav a { padding: 4px 8px; font-size: 10.5px; }
+    }
+
+    @media (min-width: 1440px) {
+      #left-panel { width: 480px; min-width: 480px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="topbar-left">
+    <div class="topbar-mark">FTM</div>
+    <div class="topbar-title">
+      <span class="product">Follow The Money</span>
+      <span class="agency">Public Money Recipients (non-charity)</span>
+    </div>
+  </div>
+  <div class="topbar-nav">
+    <a href="/">Funding Loops</a>
+    <a href="/entities.html" class="active">Public Recipients</a>
+  </div>
+</div>
+
+<div id="main">
+  <div id="left-panel">
+    <div class="left-header">
+      <h2>Search & Browse</h2>
+      <input id="search-box" class="search-box" type="text" placeholder="Search by recipient name…" autocomplete="off">
+      <div class="search-hint" id="search-hint">Showing top 50 recipients of federal + Alberta public funds</div>
+    </div>
+    <div id="recipients-list" class="recipients-list">
+      <div style="padding:20px;color:var(--text-faint);font-size:12px;">Loading recipients…</div>
+    </div>
+  </div>
+
+  <div id="right-panel">
+    <div id="profile-empty">Select a recipient to view their public funding profile</div>
+    <div id="profile-content" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+let allRecipients = [];
+let activeName = null;
+let searchTimer = null;
+
+function fmt(n) {
+  if (n == null) return '—';
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+  return '$' + Number(n).toFixed(0);
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+async function loadTop() {
+  try {
+    const res = await fetch('/api/recipients/top');
+    const data = await res.json();
+    allRecipients = data.recipients || [];
+    renderList(allRecipients);
+    document.getElementById('search-hint').textContent =
+      `Showing top ${allRecipients.length} recipients · ${data.stats.total_funding_fmt} total`;
+    if (allRecipients.length > 0) selectRecipient(allRecipients[0]);
+  } catch (err) {
+    console.error('Failed to load recipients:', err);
+    document.getElementById('recipients-list').innerHTML =
+      '<div style="padding:20px;color:var(--critical);font-size:12px;">Unable to load recipients.</div>';
+  }
+}
+
+function renderList(items) {
+  const list = document.getElementById('recipients-list');
+  if (items.length === 0) {
+    list.innerHTML = '<div style="padding:20px;color:var(--text-faint);font-size:12px;">No matches.</div>';
+    return;
+  }
+  list.innerHTML = items.map((r, i) => `
+    <div class="recipient-item ${activeName === r.norm_name ? 'active' : ''}" data-name="${escapeHtml(r.norm_name)}">
+      <div>
+        <span class="recipient-rank">${String(i + 1).padStart(2, '0')}</span>
+        <span class="recipient-name">${escapeHtml(r.display_name)}</span>
+      </div>
+      <div class="recipient-meta">
+        <span class="recipient-amt">${r.total_fmt || r.fed_total_fmt}</span>
+        ${(r.sources || ['Federal']).map(s => `<span class="src-chip ${s === 'Federal' ? 'fed' : 'ab'}">${s}</span>`).join('')}
+        <span style="color:var(--text-faint);">${r.fed_grant_count || 0} grants</span>
+      </div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.recipient-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const name = el.dataset.name;
+      const r = items.find(x => x.norm_name === name);
+      if (r) selectRecipient(r);
+    });
+  });
+}
+
+async function selectRecipient(r) {
+  activeName = r.norm_name;
+  document.querySelectorAll('.recipient-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.name === activeName);
+  });
+
+  const empty = document.getElementById('profile-empty');
+  const content = document.getElementById('profile-content');
+  empty.style.display = 'none';
+  content.style.display = 'block';
+  content.innerHTML = `
+    <div class="profile-header">
+      <div class="skel-bar" style="width:50%;height:20px;"></div>
+      <div class="skel-bar short"></div>
+    </div>
+    <div class="section"><div class="skel-bar"></div><div class="skel-bar"></div><div class="skel-bar short"></div></div>
+  `;
+
+  try {
+    const res = await fetch('/api/recipient/' + encodeURIComponent(r.norm_name));
+    if (!res.ok) {
+      content.innerHTML = `<div class="section empty"><h3>Not found</h3></div>`;
+      return;
+    }
+    const data = await res.json();
+    if (activeName !== r.norm_name) return; // user clicked another
+
+    renderProfile(data);
+  } catch (err) {
+    console.error('Profile load failed:', err);
+    content.innerHTML = `<div class="section empty"><h3>Error loading profile</h3></div>`;
+  }
+}
+
+function renderProfile(d) {
+  const content = document.getElementById('profile-content');
+  const loc = [d.city, d.province].filter(Boolean).join(', ') || 'Location unknown';
+
+  let html = `
+    <div class="profile-header">
+      <div class="profile-name">${escapeHtml(d.display_name)}</div>
+      <div class="profile-loc">${escapeHtml(loc)}${d.recipient_type ? ' · ' + escapeHtml(d.recipient_type) : ''}</div>
+      <div class="profile-totals">
+        <div class="total-block">
+          <div class="total-label">Total Public Funding</div>
+          <div class="total-value">${d.totals.grand_total_fmt}</div>
+        </div>
+        <div class="total-block">
+          <div class="total-label">Federal</div>
+          <div class="total-value ${d.totals.federal === 0 ? 'muted' : ''}">${d.totals.federal_fmt}</div>
+          <div class="total-sub">${d.federal.grant_count} grants · ${d.federal.dept_count} departments</div>
+        </div>
+        <div class="total-block">
+          <div class="total-label">Alberta</div>
+          <div class="total-value ${d.totals.alberta === 0 ? 'muted' : ''}">${d.totals.alberta_fmt}</div>
+          <div class="total-sub">${d.alberta.contracts.length + d.alberta.sole_source.length + d.alberta.grants.length} records${d.alberta.available ? '' : ' · AB unavailable'}</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Federal grants table
+  if (d.federal.grants.length > 0) {
+    html += `
+      <div class="section">
+        <h3>Federal Grants & Contributions (${d.federal.grants.length})</h3>
+        <table class="grant-table">
+          <thead><tr>
+            <th>Department</th>
+            <th>Program / Title</th>
+            <th style="text-align:right;">Amount</th>
+            <th>Period</th>
+          </tr></thead>
+          <tbody>
+            ${d.federal.grants.map(g => `
+              <tr>
+                <td class="dept" title="${escapeHtml(g.owner_org_title || '')}">${escapeHtml(g.owner_org_title || '—')}</td>
+                <td class="title">${escapeHtml(g.prog_name_en || g.agreement_title_en || '—')}</td>
+                <td class="amt">${g.agreement_value_fmt}</td>
+                <td>${g.agreement_start_date ? new Date(g.agreement_start_date).getFullYear() : '?'}–${g.agreement_end_date ? new Date(g.agreement_end_date).getFullYear() : '?'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // AB sole-source
+  if (d.alberta.sole_source.length > 0) {
+    html += `
+      <div class="section">
+        <h3>Alberta Sole-Source Contracts (${d.alberta.sole_source.length}) · ${d.alberta.sole_source_total_fmt}</h3>
+        <table class="grant-table">
+          <thead><tr>
+            <th>Ministry</th>
+            <th>Description</th>
+            <th style="text-align:right;">Amount</th>
+          </tr></thead>
+          <tbody>
+            ${d.alberta.sole_source.map(c => `
+              <tr>
+                <td class="dept">${escapeHtml(c.ministry || '—')}</td>
+                <td class="title">${escapeHtml(c.contract_description || '—')}</td>
+                <td class="amt">${c.contract_value_fmt}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // AB contracts
+  if (d.alberta.contracts.length > 0) {
+    html += `
+      <div class="section">
+        <h3>Alberta Contracts (${d.alberta.contracts.length}) · ${d.alberta.contract_total_fmt}</h3>
+        <table class="grant-table">
+          <thead><tr>
+            <th>Fiscal Year</th>
+            <th>Ministry</th>
+            <th style="text-align:right;">Amount</th>
+          </tr></thead>
+          <tbody>
+            ${d.alberta.contracts.map(c => `
+              <tr>
+                <td>${escapeHtml(c.fiscal_year || '—')}</td>
+                <td class="dept">${escapeHtml(c.ministry || '—')}</td>
+                <td class="amt">${c.amount_fmt}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // AB grants
+  if (d.alberta.grants.length > 0) {
+    html += `
+      <div class="section">
+        <h3>Alberta Grants (${d.alberta.grants.length}) · ${d.alberta.grant_total_fmt}</h3>
+        <table class="grant-table">
+          <thead><tr>
+            <th>Ministry</th>
+            <th>Program</th>
+            <th style="text-align:right;">Amount</th>
+          </tr></thead>
+          <tbody>
+            ${d.alberta.grants.map(g => `
+              <tr>
+                <td class="dept">${escapeHtml(g.ministry || '—')}</td>
+                <td class="title">${escapeHtml(g.program || '—')}</td>
+                <td class="amt">${g.amount_fmt}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  content.innerHTML = html;
+}
+
+// Search with debounce
+document.getElementById('search-box').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  searchTimer = setTimeout(() => {
+    if (q.length === 0) {
+      renderList(allRecipients);
+      document.getElementById('search-hint').textContent =
+        `Showing top ${allRecipients.length} recipients`;
+      return;
+    }
+    if (q.length < 2) return;
+    fetch('/api/recipients/search?q=' + encodeURIComponent(q))
+      .then(r => r.json())
+      .then(data => {
+        const results = (data.results || []).map(r => ({
+          ...r,
+          total_fmt: r.fed_total_fmt,
+          sources: ['Federal'],
+        }));
+        renderList(results);
+        document.getElementById('search-hint').textContent =
+          `${results.length} matches for "${q}"`;
+      })
+      .catch(err => console.error('Search failed:', err));
+  }, 250);
+});
+
+loadTop();
+</script>
+</body>
+</html>
