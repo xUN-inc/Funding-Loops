@@ -764,25 +764,45 @@ async function generateMemo(loopId) {
     controlling_directors: directorContext,
   };
 
-  const prompt = `You are a forensic accountant reviewing Canadian charity funding patterns for a government accountability investigation. Analyze this circular funding loop in exactly 3 paragraphs of plain prose.
-
-OUTPUT RULES (strict):
-- Plain text only. No salutation ("Dear", "To whom it may concern"), no signature, no sender/recipient block, no date line, no "Subject:" or "Re:" header, no "Sincerely" / "Regards".
-- No markdown. No bullet points. No headings. No bold or italics. No "Paragraph 1:" labels.
-- Just three paragraphs separated by a blank line, then the verdict tag on its own line.
-
-Paragraph 1: What these organizations are and what they claim to do. If a charity has a classification label, NAME it (e.g. "X is classified as overhead extraction") and explain what that bucket means in one short clause.
-
-Paragraph 2: What is financially suspicious or normal about this loop — consider government funding dependency, overhead ratios, whether the flow amounts are proportionate to org size, and whether the same money appears to be counted multiple times. The leakage model treats both own-program spending AND gifts to other qualified donees as "useful" disbursement (because foundations legitimately distribute via grants, not their own programs). Use leakage as primary evidence when leakage_pct exceeds 60%. If most members are foundations (designation A or B) and leakage_pct is low, do NOT call that suspicious — that is the structurally expected pattern for endowment/grant-making networks. If controlling_directors is non-empty, NAME the individual(s) and state how many of these charities they sit on. A single person on multiple boards inside one cycle is the strongest possible signal that the cycle is operated by one decision-maker.
-
-Paragraph 3: A verdict — is this loop LIKELY BENIGN (normal federated structure), REQUIRES SCRUTINY (unusual but possibly explainable), or RED FLAG (pattern consistent with revenue inflation, receipt generation, or overhead extraction). Explain your verdict in plain English a journalist could quote. Cite specific classification labels and director names where they exist.
-
-If federal grants exist for organizations in this loop, factor this into your analysis. Government money entering a circular funding loop is significantly more concerning than purely private donations cycling. Note specifically if grant money appears to enter the loop and then circulate without clear programmatic output.
-
-End your response with exactly one of these tags on its own line:
+  const prompt = `You are a forensic accountant reviewing a circular charity funding pattern for a Canadian government accountability investigation. Produce a tight bulleted signal list — NOT prose.
+ 
+OUTPUT FORMAT (strict):
+- Each line is one bullet starting with "- ".
+- Every bullet has TWO parts separated by " | Source: ":
+  - The SIGNAL: a 12-25 word clause naming the red flag, structural exemption, or absence of concern. Lead with the strongest evidence first.
+  - The SOURCE: which database table/column or computed metric produced this evidence. Use the canonical names from the DATA SOURCES list below.
+- 4 to 8 bullets total. Stop when you run out of meaningful signals — do not pad.
+- No salutation, no headers, no paragraphs, no closing remarks, no "Sincerely". No markdown bold/italic, no nested bullets.
+- After the bullets, leave one blank line, then the verdict tag on its own line.
+ 
+DATA SOURCES you may cite (use these exact names):
+- cra.loop_classification — bucket labels (overhead_extraction, receipt_generation, revenue_inflation, structural, low_risk), risk_score 0-30, overhead_pct, program_pct
+- cra.loop_charity_financials — program_spending, gifts_given_donees, compensation_spending, admin_spending, fundraising_spending, revenue, designation
+- cra.overhead_by_charity / cra.govt_funding_by_charity — total_revenue, federal_government_revenue, provincial_government_revenue, strict_overhead_pct
+- cra.cra_directors — last_name + first_name match across loop BNs (controlling-director signal)
+- fed.grants_contributions — agreement_value, owner_org, agreement_title (federal grant entering the loop)
+- general.entity_golden_records — aliases, dataset_sources (cross-dataset / renamed-shell signal)
+- cra.partitioned_cycles — hops, total_flow, bottleneck_amt, year_range
+- computed: leakage_pct (loop-level), data_coverage (fraction of BNs with financial data)
+ 
+INTERPRETATION RULES:
+- Treat leakage_pct >= 60% as a primary red flag. Below 40% is fine.
+- If most members are designation A or B (foundations) and leakage is low, that is structurally expected — call it out as a benign signal, not a concern.
+- A single named individual sitting on 2+ boards inside the cycle is the strongest single signal. Always include such a bullet by name when controlling_directors is non-empty.
+- Federal grant dollars entering a high-leakage loop is materially worse than private donations cycling. Call this out explicitly.
+- When a charity is classified as \'structural\', mark it as a benign-by-design signal, not a red flag.
+ 
+VERDICT TAG (last line, exactly one of):
 [VERDICT: LIKELY BENIGN]
 [VERDICT: REQUIRES SCRUTINY]
 [VERDICT: RED FLAG]
+ 
+EXAMPLES of well-formed bullets (do not copy verbatim — generate from the data):
+- Loop leakage 87% — most of one bottleneck dollar is absorbed by compensation and admin, not programs | Source: cra.loop_charity_financials (compensation_spending + admin_spending vs program_spending)
+- Walter Berlin sits on 3 of 4 boards in the cycle, including the highest-flow node | Source: cra.cra_directors (shared last_name + first_name across loop BNs)
+- $4.2M federal grant from Employment and Social Development Canada flows into the highest-leakage participant | Source: fed.grants_contributions (agreement_value, owner_org)
+- All 4 charities are designation B private foundations with overhead under 15% — endowment grant cycle, structurally expected | Source: cra.loop_classification (designation, classification=structural)
+ 
 
 Data: ${JSON.stringify(loopData, null, 2)}`;
 
@@ -895,13 +915,13 @@ const VALID_CLASSES = new Set(['overhead_extraction', 'receipt_generation', 'rev
 
 app.get('/api/loops', async (req, res) => {
   try {
-    const limit         = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
-    const offset        = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const sort          = VALID_SORTS.has(req.query.sort) ? req.query.sort : 'flow';
-    const dir           = req.query.dir === 'asc' ? 'asc' : 'desc';
-    const classes       = (req.query.classifications || '')
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const sort = VALID_SORTS.has(req.query.sort) ? req.query.sort : 'flow';
+    const dir = req.query.dir === 'asc' ? 'asc' : 'desc';
+    const classes = (req.query.classifications || '')
       .split(',').map(s => s.trim()).filter(s => VALID_CLASSES.has(s));
-    const minDirectors  = Math.max(parseInt(req.query.min_directors, 10) || 0, 0);
+    const minDirectors = Math.max(parseInt(req.query.min_directors, 10) || 0, 0);
 
     const all = await getLoopPool();
 
@@ -912,10 +932,10 @@ app.get('/api/loops', async (req, res) => {
 
     // Sort
     const sortKey = {
-      flow:      l => l.total_flow,
+      flow: l => l.total_flow,
       directors: l => l.shared_directors,
-      hops:      l => l.hops,
-      recent:    l => l.max_year,
+      hops: l => l.hops,
+      recent: l => l.max_year,
     }[sort];
     const mult = dir === 'desc' ? -1 : 1;
     filtered = [...filtered].sort((a, b) => (sortKey(a) - sortKey(b)) * mult);
@@ -976,115 +996,115 @@ async function buildLoopDetail(id) {
   const loop = rows[0];
   const bns = parseBNs(loop.path_display);
 
-    // path_display closes the cycle (e.g. A→B→C→A), so bns has the
-    // first BN repeated at the end. Dedupe for the leakage waterfall
-    // so each charity is listed once; keep `bns` as-is for nodes/edges
-    // so the network graph still draws the closing edge.
-    const uniqBns = [...new Set(bns)];
+  // path_display closes the cycle (e.g. A→B→C→A), so bns has the
+  // first BN repeated at the end. Dedupe for the leakage waterfall
+  // so each charity is listed once; keep `bns` as-is for nodes/edges
+  // so the network graph still draws the closing edge.
+  const uniqBns = [...new Set(bns)];
 
-    const [profiles, overhead, fedDetail, classMap, directors, golden, finMap] = await Promise.all([
-      resolveProfiles(bns),
-      getOverhead(bns),
-      getDetailedFederalGrants(bns),
-      getClassifications(bns),
-      getDirectorOverlap(bns),
-      getGoldenEnrichment(bns),
-      getLoopFinancials(uniqBns),
-    ]);
+  const [profiles, overhead, fedDetail, classMap, directors, golden, finMap] = await Promise.all([
+    resolveProfiles(bns),
+    getOverhead(bns),
+    getDetailedFederalGrants(bns),
+    getClassifications(bns),
+    getDirectorOverlap(bns),
+    getGoldenEnrichment(bns),
+    getLoopFinancials(uniqBns),
+  ]);
 
-    const profileMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
-    const overheadMap = Object.fromEntries(overhead.map(o => [o.bn, o]));
+  const profileMap = Object.fromEntries(profiles.map(p => [p.bn, p]));
+  const overheadMap = Object.fromEntries(overhead.map(o => [o.bn, o]));
 
-    // Loop Leakage Rate — how much of one bottleneck dollar entering the
-    // cycle reaches a charitable purpose (own programs or grants to other
-    // qualified donees) vs. is absorbed by comp / admin / fundraising.
-    const leakage = computeLeakage(uniqBns, finMap, loop.bottleneck_amt);
+  // Loop Leakage Rate — how much of one bottleneck dollar entering the
+  // cycle reaches a charitable purpose (own programs or grants to other
+  // qualified donees) vs. is absorbed by comp / admin / fundraising.
+  const leakage = computeLeakage(uniqBns, finMap, loop.bottleneck_amt);
 
-    // Decorate waterfall entries with display names for the UI.
-    leakage.waterfall = leakage.waterfall.map(w => ({
-      ...w,
-      legal_name: profileMap[w.bn]?.legal_name || w.bn,
-    }));
+  // Decorate waterfall entries with display names for the UI.
+  leakage.waterfall = leakage.waterfall.map(w => ({
+    ...w,
+    legal_name: profileMap[w.bn]?.legal_name || w.bn,
+  }));
 
-    // Build nodes
-    const nodes = bns.map(bn => {
-      const prof = profileMap[bn] || {};
-      const oh = overheadMap[bn] || {};
-      const c = classMap[bn] || {};
-      const g = golden[bn] || {};
-      const totalRev = Number(oh.total_revenue) || 0;
-      const fedRev = Number(oh.federal_government_revenue) || 0;
-      const provRev = Number(oh.provincial_government_revenue) || 0;
-      const govPct = oh.govt_share_of_rev != null
-        ? Number(oh.govt_share_of_rev)
-        : (totalRev > 0 ? (fedRev + provRev) / totalRev : 0);
-
-      return {
-        bn,
-        legal_name: prof.legal_name || bn,
-        city: prof.city || 'Unknown',
-        province: prof.province || 'Unknown',
-        category_name: prof.category_name || 'Unknown',
-        designation: c.designation || null,
-        classification: c.classification || null,
-        classification_label: c.classification ? CLASSIFICATION_LABEL[c.classification] : null,
-        risk_score: c.total_score != null ? Number(c.total_score) : null,
-        overhead_pct: c.overhead_pct != null ? Number(c.overhead_pct) : null,
-        program_pct: c.program_pct != null ? Number(c.program_pct) : null,
-        total_revenue: totalRev,
-        total_revenue_fmt: formatCurrency(totalRev),
-        federal_government_revenue: fedRev,
-        provincial_government_revenue: provRev,
-        strict_overhead_pct: oh.strict_overhead_pct != null ? Number(oh.strict_overhead_pct) : null,
-        gov_funding_pct: govPct,
-        color: govPct > 0.7 ? 'red' : govPct > 0.4 ? 'orange' : 'green',
-        // Cross-dataset golden-record enrichment
-        aliases: g.aliases || [],
-        dataset_sources: g.dataset_sources || [],
-        in_fed: !!g.in_fed,
-        in_ab: !!g.in_ab,
-        related_count: g.related_count || 0,
-      };
-    });
-
-    const worstCls = worstClassification(classMap, bns);
-    const directorContext = directors.map(d => ({
-      director_name: d.director_name,
-      boards_in_cycle: d.boards_in_cycle,
-      bns: d.bns,
-      charity_names: d.bns.map(bn => profileMap[bn]?.legal_name || bn),
-    }));
-
-    // Build edges (sequential pairs in the path, plus last → first to close loop)
-    const edges = [];
-    for (let i = 0; i < bns.length - 1; i++) {
-      edges.push({ source: bns[i], target: bns[i + 1] });
-    }
-    // Close the loop
-    if (bns.length > 1) {
-      edges.push({ source: bns[bns.length - 1], target: bns[0] });
-    }
+  // Build nodes
+  const nodes = bns.map(bn => {
+    const prof = profileMap[bn] || {};
+    const oh = overheadMap[bn] || {};
+    const c = classMap[bn] || {};
+    const g = golden[bn] || {};
+    const totalRev = Number(oh.total_revenue) || 0;
+    const fedRev = Number(oh.federal_government_revenue) || 0;
+    const provRev = Number(oh.provincial_government_revenue) || 0;
+    const govPct = oh.govt_share_of_rev != null
+      ? Number(oh.govt_share_of_rev)
+      : (totalRev > 0 ? (fedRev + provRev) / totalRev : 0);
 
     return {
-      loop: {
-        id: loop.id,
-        hops: loop.hops,
-        total_flow: loop.total_flow,
-        total_flow_fmt: formatCurrency(Number(loop.total_flow)),
-        bottleneck_amt: loop.bottleneck_amt,
-        bottleneck_amt_fmt: formatCurrency(Number(loop.bottleneck_amt)),
-        min_year: loop.min_year,
-        max_year: loop.max_year,
-        tier: loop.tier,
-        worst_classification: worstCls,
-        worst_classification_label: CLASSIFICATION_LABEL[worstCls] || 'Low Risk',
-      },
-      nodes,
-      edges,
-      federal_grants: fedDetail,
-      directors: directorContext,
-      leakage,
+      bn,
+      legal_name: prof.legal_name || bn,
+      city: prof.city || 'Unknown',
+      province: prof.province || 'Unknown',
+      category_name: prof.category_name || 'Unknown',
+      designation: c.designation || null,
+      classification: c.classification || null,
+      classification_label: c.classification ? CLASSIFICATION_LABEL[c.classification] : null,
+      risk_score: c.total_score != null ? Number(c.total_score) : null,
+      overhead_pct: c.overhead_pct != null ? Number(c.overhead_pct) : null,
+      program_pct: c.program_pct != null ? Number(c.program_pct) : null,
+      total_revenue: totalRev,
+      total_revenue_fmt: formatCurrency(totalRev),
+      federal_government_revenue: fedRev,
+      provincial_government_revenue: provRev,
+      strict_overhead_pct: oh.strict_overhead_pct != null ? Number(oh.strict_overhead_pct) : null,
+      gov_funding_pct: govPct,
+      color: govPct > 0.7 ? 'red' : govPct > 0.4 ? 'orange' : 'green',
+      // Cross-dataset golden-record enrichment
+      aliases: g.aliases || [],
+      dataset_sources: g.dataset_sources || [],
+      in_fed: !!g.in_fed,
+      in_ab: !!g.in_ab,
+      related_count: g.related_count || 0,
     };
+  });
+
+  const worstCls = worstClassification(classMap, bns);
+  const directorContext = directors.map(d => ({
+    director_name: d.director_name,
+    boards_in_cycle: d.boards_in_cycle,
+    bns: d.bns,
+    charity_names: d.bns.map(bn => profileMap[bn]?.legal_name || bn),
+  }));
+
+  // Build edges (sequential pairs in the path, plus last → first to close loop)
+  const edges = [];
+  for (let i = 0; i < bns.length - 1; i++) {
+    edges.push({ source: bns[i], target: bns[i + 1] });
+  }
+  // Close the loop
+  if (bns.length > 1) {
+    edges.push({ source: bns[bns.length - 1], target: bns[0] });
+  }
+
+  return {
+    loop: {
+      id: loop.id,
+      hops: loop.hops,
+      total_flow: loop.total_flow,
+      total_flow_fmt: formatCurrency(Number(loop.total_flow)),
+      bottleneck_amt: loop.bottleneck_amt,
+      bottleneck_amt_fmt: formatCurrency(Number(loop.bottleneck_amt)),
+      min_year: loop.min_year,
+      max_year: loop.max_year,
+      tier: loop.tier,
+      worst_classification: worstCls,
+      worst_classification_label: CLASSIFICATION_LABEL[worstCls] || 'Low Risk',
+    },
+    nodes,
+    edges,
+    federal_grants: fedDetail,
+    directors: directorContext,
+    leakage,
+  };
 }
 
 // Layered lookup: L1 in-process Map -> L2 SQLite (lib/cache) -> L3 Postgres.
