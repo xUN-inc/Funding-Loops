@@ -12,12 +12,15 @@ export default function Badge({ color = 'gray', children }) {
   const { C } = useTheme();
   const tone = (TONES[color] ?? TONES.gray)(C);
   return (
-    <span style={{
-      background: `${tone.accent}18`,
-      color: tone.text,
-      border: `1px solid ${tone.accent}38`,
-      borderRadius: 4, padding: '1px 6px', fontSize: 11, fontWeight: 700,
-      fontFamily: 'var(--font-geist-mono), monospace', display: 'inline-block',
-    }}>{children}</span>
+    <span
+      className="inline-block rounded px-1.5 py-px text-[11px] font-bold font-mono"
+      style={{
+        background: `${tone.accent}18`,
+        color: tone.text,
+        border: `1px solid ${tone.accent}38`,
+      }}
+    >
+      {children}
+    </span>
   );
 }

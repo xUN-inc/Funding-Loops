@@ -3,13 +3,17 @@ import { useTheme } from '../theme';
 export function LoadingState({ message = 'Loading…' }) {
   const { C } = useTheme();
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300, color: C.text3 }}>
-      <div style={{ textAlign: 'center' }}>
-        <div style={{
-          width: 22, height: 22, border: `2px solid ${C.border}`, borderTopColor: C.primary,
-          borderRadius: '50%', animation: 'spin .8s linear infinite', margin: '0 auto 12px',
-        }} />
-        <div style={{ fontSize: 13 }}>{message}</div>
+    <div className="flex items-center justify-center h-[300px] text-text3">
+      <div className="text-center">
+        <div
+          className="w-[22px] h-[22px] rounded-full mx-auto mb-3"
+          style={{
+            border: `2px solid ${C.border}`,
+            borderTopColor: C.primary,
+            animation: 'spin .8s linear infinite',
+          }}
+        />
+        <div className="text-[13px]">{message}</div>
       </div>
     </div>
   );
@@ -18,23 +22,24 @@ export function LoadingState({ message = 'Loading…' }) {
 export function ErrorState({ message }) {
   const { C } = useTheme();
   return (
-    <div style={{
-      background: `${C.danger}10`, border: `1px solid ${C.danger}30`,
-      borderRadius: 8, padding: 16, color: C.danger, fontSize: 13,
-      fontFamily: 'var(--font-geist-mono), monospace',
-    }}>{message}</div>
+    <div
+      className="rounded-lg p-4 text-[13px] font-mono"
+      style={{
+        background: `${C.danger}10`,
+        border: `1px solid ${C.danger}30`,
+        color: C.danger,
+      }}
+    >
+      {message}
+    </div>
   );
 }
 
 export function EmptyState({ title = 'No results', subtitle }) {
-  const { C } = useTheme();
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      height: 240, color: C.text3, textAlign: 'center', gap: 4,
-    }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: C.text2 }}>{title}</div>
-      {subtitle && <div style={{ fontSize: 12 }}>{subtitle}</div>}
+    <div className="flex flex-col items-center justify-center h-60 text-text3 text-center gap-1">
+      <div className="text-[14px] font-semibold text-text2">{title}</div>
+      {subtitle ? <div className="text-[12px]">{subtitle}</div> : null}
     </div>
   );
 }

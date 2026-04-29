@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
-  SectionCard, Badge, LoadingState, ErrorState, Th, Td, useTheme,
+  SectionCard, LoadingState, ErrorState, Th, Td, useTheme,
 } from '../../ui-kit';
 import NetworkCanvas   from '../components/NetworkCanvas.jsx';
 import VerdictCluster  from '../components/VerdictCluster.jsx';
+import LeakageNote     from '../components/LeakageNote.jsx';
 import { api } from '../lib/api';
 
 export default function LoopDetail({ loopId }) {
@@ -22,17 +23,15 @@ export default function LoopDetail({ loopId }) {
   const { loop, nodes, edges, leakage, federal_grants, directors } = data;
   const graphEdges = edges.map(e => ({ source: e.source, target: e.target }));
   const hasGrants    = federal_grants?.has_grants;
-  const hasDirectors = directors?.length > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Identification strip — terse, mono, low-volume */}
+    <div className="flex flex-col gap-[18px]">
       <IdentificationStrip loop={loop} nodes={nodes} />
 
-      {/* Verdict cluster — radar + KPIs in one frame */}
-      <VerdictCluster loop={loop} nodes={nodes} leakage={leakage} />
+      <LeakageNote loop={loop} leakage={leakage} />
 
-      {/* Network — full width, prime real estate. This is where investigation happens. */}
+      <VerdictCluster loop={loop} leakage={leakage} directors={directors} />
+
       <SectionCard
         title="Flow Network"
         subtitle="Drag nodes · radius scales with revenue · color = government dependency"
@@ -40,31 +39,18 @@ export default function LoopDetail({ loopId }) {
         <NetworkCanvas nodes={nodes} edges={graphEdges} height={Math.min(520, 240 + nodes.length * 40)} />
       </SectionCard>
 
-      {/* Evidence row: leakage waterfall + directors side-by-side */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: hasDirectors ? 'minmax(0, 1.6fr) minmax(0, 1fr)' : '1fr',
-        gap: 18, alignItems: 'start',
-      }}>
-        <SectionCard
-          title="Leakage Waterfall"
-          subtitle="One bottleneck dollar moving once around the cycle"
-        >
-          <WaterfallTable rows={leakage.waterfall} />
-        </SectionCard>
+      <SectionCard
+        title="Per-Hop Leakage Waterfall"
+        subtitle={
+          <>
+            Modelling the <strong>{loop.bottleneck_amt_fmt}</strong> bottleneck dollar moving once around the cycle.
+            At each hop, destination charity's most recent T3010 spending mix determines what survives.
+          </>
+        }
+      >
+        <WaterfallBars rows={leakage.waterfall} />
+      </SectionCard>
 
-        {hasDirectors ? (
-          <SectionCard
-            title="Controlling Directors"
-            subtitle="Individuals seated on 2+ boards inside this cycle"
-            accent={C.danger}
-          >
-            <DirectorList directors={directors} />
-          </SectionCard>
-        ) : null}
-      </div>
-
-      {/* Federal grants — only when present, low-priority placement */}
       {hasGrants ? (
         <SectionCard
           title="Federal Grants Touching This Loop"
@@ -79,7 +65,6 @@ export default function LoopDetail({ loopId }) {
 }
 
 function IdentificationStrip({ loop }) {
-  const { C } = useTheme();
   const cells = [
     { label: 'LOOP',  value: `#${loop.id}` },
     { label: 'HOPS',  value: String(loop.hops) },
@@ -87,104 +72,147 @@ function IdentificationStrip({ loop }) {
     { label: 'TIER',  value: String(loop.tier ?? '—').toUpperCase() },
   ];
   return (
-    <div style={{
-      display: 'flex', alignItems: 'stretch',
-      background: C.surface,
-      border: `1px solid ${C.border}`,
-      borderRadius: 8,
-      overflow: 'hidden',
-    }}>
+    <div className="flex items-stretch bg-surface border border-border rounded-lg overflow-hidden">
       {cells.map((c, i) => (
-        <div key={c.label} style={{
-          padding: '10px 16px',
-          borderRight: i < cells.length - 1 ? `1px solid ${C.border}` : 'none',
-          display: 'flex', flexDirection: 'column', gap: 2,
-        }}>
-          <span style={{
-            fontSize: 9, fontWeight: 700, color: C.text3,
-            letterSpacing: '.14em',
-            fontFamily: 'var(--font-geist-mono), monospace',
-          }}>{c.label}</span>
-          <span style={{
-            fontSize: 13, fontWeight: 700, color: C.text,
-            fontFamily: 'var(--font-geist-mono), monospace',
-            letterSpacing: '-.01em',
-          }}>{c.value}</span>
+        <div
+          key={c.label}
+          className={`px-4 py-2.5 flex flex-col gap-0.5 ${i < cells.length - 1 ? 'border-r border-border' : ''}`}
+        >
+          <span
+            className="text-[9px] font-bold text-text3 font-mono"
+            style={{ letterSpacing: '.14em' }}
+          >
+            {c.label}
+          </span>
+          <span
+            className="text-[13px] font-bold text-text font-mono"
+            style={{ letterSpacing: '-.01em' }}
+          >
+            {c.value}
+          </span>
         </div>
       ))}
     </div>
   );
 }
 
-function WaterfallTable({ rows }) {
-  return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <Th>Org</Th>
-            <Th right>In</Th>
-            <Th right>Programs</Th>
-            <Th right>Gifts</Th>
-            <Th right>Comp</Th>
-            <Th right>Admin</Th>
-            <Th right>Fundraise</Th>
-            <Th right>Useful</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(w => (
-            <tr key={w.bn}>
-              <Td>{shorten(w.legal_name, 32)}</Td>
-              <Td right mono>{w.in_amt_fmt}</Td>
-              <Td right mono>{w.program_amt_fmt}</Td>
-              <Td right mono>{w.gifts_amt_fmt}</Td>
-              <Td right mono muted>{w.comp_amt_fmt}</Td>
-              <Td right mono muted>{w.admin_amt_fmt}</Td>
-              <Td right mono muted>{w.fundraising_amt_fmt}</Td>
-              <Td right mono>{w.useful_amt_fmt}</Td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function DirectorList({ directors }) {
+function WaterfallBars({ rows }) {
   const { C } = useTheme();
+
+  const SEGMENTS = [
+    { key: 'program_share',     label: 'Programs',              color: C.success },
+    { key: 'gifts_share',       label: 'Gifts to other charities', color: C.cyan },
+    { key: 'comp_share',        label: 'Compensation',          color: C.warning },
+    { key: 'admin_share',       label: 'Admin',                 color: C.danger },
+    { key: 'fundraising_share', label: 'Fundraising',           color: C.purple },
+  ];
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {directors.map(d => (
-        <div key={d.director_name} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '10px 12px', background: C.surface2, borderRadius: 6,
-          border: `1px solid ${C.border}`, gap: 10,
-        }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{
-              fontSize: 12, fontWeight: 600, color: C.text,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{d.director_name}</div>
-            <div style={{
-              fontSize: 10, color: C.text3, marginTop: 2, lineHeight: 1.4,
-              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}>
-              {d.charity_names.join(' · ')}
+    <div className="flex flex-col gap-3 w-full">
+      <div className="flex flex-col gap-2">
+        {rows.map((w) => {
+          const designation = (w.designation || '—').toUpperCase();
+          return (
+            <div
+              key={w.bn}
+              className="grid items-center gap-3 py-1.5"
+              style={{ gridTemplateColumns: '64px minmax(0, 220px) 1fr 88px' }}
+            >
+              <span
+                className="inline-flex items-center justify-center px-2 py-1 rounded-md text-[10px] font-bold font-mono uppercase tracking-wider"
+                style={{
+                  background: C.surface2,
+                  border: `1px solid ${C.border}`,
+                  color: C.text2,
+                  letterSpacing: '.08em',
+                }}
+                title={w.designation || 'No designation'}
+              >
+                {shorten(designation, 6)}
+              </span>
+              <span className="text-[12px] font-semibold text-text truncate" title={w.legal_name}>
+                {shorten(w.legal_name, 38)}
+              </span>
+              <BarStack segments={SEGMENTS} row={w} noDataColor={C.text3} bg={C.surface2} />
+              <span className="text-[12px] font-bold text-text font-mono text-right">
+                {w.useful_amt_fmt}
+              </span>
             </div>
-          </div>
-          <Badge color="red">{d.boards_in_cycle} boards</Badge>
+          );
+        })}
+      </div>
+      <Legend segments={SEGMENTS} noDataColor={C.text3} />
+    </div>
+  );
+}
+
+function BarStack({ segments, row, noDataColor, bg }) {
+  if (!row.has_data) {
+    return (
+      <div
+        className="h-[18px] rounded-sm overflow-hidden flex"
+        style={{ background: bg, border: `1px solid ${noDataColor}30` }}
+      >
+        <div
+          className="h-full w-full"
+          style={{ background: `repeating-linear-gradient(45deg, ${noDataColor}30 0 6px, ${noDataColor}10 6px 12px)` }}
+          title="No T3010 data"
+        />
+      </div>
+    );
+  }
+  const total = segments.reduce((s, seg) => s + (Number(row[seg.key]) || 0), 0);
+  return (
+    <div
+      className="h-[18px] rounded-sm overflow-hidden flex"
+      style={{ background: bg }}
+    >
+      {segments.map((seg) => {
+        const v = Number(row[seg.key]) || 0;
+        const pct = total > 0 ? (v / total) * 100 : 0;
+        if (pct <= 0) return null;
+        return (
+          <div
+            key={seg.key}
+            className="h-full"
+            style={{ width: `${pct}%`, background: seg.color }}
+            title={`${seg.label}: ${(v * 100).toFixed(1)}%`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function Legend({ segments, noDataColor }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-2 border-t border-border">
+      {segments.map((seg) => (
+        <div key={seg.key} className="flex items-center gap-1.5">
+          <span
+            className="inline-block w-3 h-3 rounded-sm"
+            style={{ background: seg.color }}
+          />
+          <span className="text-[11px] text-text2">{seg.label}</span>
         </div>
       ))}
+      <div className="flex items-center gap-1.5">
+        <span
+          className="inline-block w-3 h-3 rounded-sm"
+          style={{
+            background: `repeating-linear-gradient(45deg, ${noDataColor}40 0 3px, ${noDataColor}15 3px 6px)`,
+          }}
+        />
+        <span className="text-[11px] text-text2">No data</span>
+      </div>
     </div>
   );
 }
 
 function GrantsTable({ grants }) {
   return (
-    <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <div className="overflow-x-auto overflow-y-auto max-h-[280px]">
+      <table className="w-full border-collapse">
         <thead>
           <tr>
             <Th>Recipient</Th>

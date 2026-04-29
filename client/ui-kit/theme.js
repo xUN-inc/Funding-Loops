@@ -60,11 +60,11 @@ export const CHART_COLORS_FOR = (C) => [
   C.primary, C.success, C.warning, C.danger, C.purple, C.cyan,
 ];
 
-export const C = PALETTES.dark;
-export const CHART_COLORS = CHART_COLORS_FOR(PALETTES.dark);
+export const C = PALETTES.light;
+export const CHART_COLORS = CHART_COLORS_FOR(PALETTES.light);
 
 const NOOP = () => {};
-const DEFAULT_CTX = { C: PALETTES.dark, theme: 'dark', setTheme: NOOP, toggleTheme: NOOP };
+const DEFAULT_CTX = { C: PALETTES.light, theme: 'light', setTheme: NOOP, toggleTheme: NOOP };
 const ThemeContext = createContext(DEFAULT_CTX);
 
 function readStoredTheme(fallback) {
@@ -89,7 +89,7 @@ export function ThemeFlickerGuard() {
   return <script dangerouslySetInnerHTML={{ __html: code }} />;
 }
 
-export function ThemeProvider({ children, defaultTheme = 'dark' }) {
+export function ThemeProvider({ children, defaultTheme = 'light' }) {
   // Lazy init — read storage once on mount instead of every render
   const [theme, setThemeState] = useState(() => readStoredTheme(defaultTheme));
 

@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "kill": "kill-port 3000 5173",
+    "postinstall": "cd client && npm install",
     "start": "npm run kill --silent && concurrently -n server,client -c blue,magenta \"node server.js\" \"npm run client\"",
     "server": "npm run kill --silent && node server.js",
     "client": "cd client && npm run dev",
@@ -13,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/genai": "^1.50.1",
+    "better-sqlite3": "^12.9.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.0",
     "pg": "^8.13.0"
