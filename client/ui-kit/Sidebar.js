@@ -81,17 +81,7 @@ export default function Sidebar({
     <aside
       className={`${widthCls} shrink-0 sticky top-0 h-screen flex flex-col bg-sidebar-bg border-r border-border transition-[width] duration-200 ease-out`}
     >
-      {/* Brand bar */}
-      {/* Toggle row — own row, sits above brand so brand title never gets squeezed */}
-      <div
-        className={`flex items-center border-b border-border ${
-          collapsed ? 'justify-center px-2 py-2' : 'justify-end px-2 py-2'
-        }`}
-      >
-        <CollapseButton collapsed={collapsed} onClick={handleToggle} />
-      </div>
-
-      {/* Brand row — full width below toggle */}
+      {/* Brand row — sits at top, toggle row sits below */}
       <div
         className={`flex items-center gap-2.5 border-b border-border ${
           collapsed ? 'justify-center px-2 py-3' : 'px-4 py-3'
@@ -116,6 +106,11 @@ export default function Sidebar({
             ) : null}
           </div>
         ) : null}
+      </div>
+
+      {/* Toggle row — below brand, above nav sections */}
+      <div className={`${collapsed ? 'px-2 py-2 flex justify-center' : 'px-2 pt-2'}`}>
+        <CollapseButton collapsed={collapsed} onClick={handleToggle} />
       </div>
 
       <nav className="flex-1 px-2 py-2.5 overflow-y-auto">
@@ -183,15 +178,28 @@ export default function Sidebar({
 }
 
 function CollapseButton({ collapsed, onClick }) {
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label="Expand sidebar"
+        title="Expand sidebar"
+        className="w-[26px] h-[26px] rounded-md flex items-center justify-center bg-surface2 border-0 text-text2 cursor-pointer shrink-0 transition-colors hover:text-text hover:bg-hover-bg"
+      >
+        {ChevronRight}
+      </button>
+    );
+  }
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      className="w-[26px] h-[26px] rounded-md flex items-center justify-center bg-surface2 border border-border text-text2 cursor-pointer shrink-0 transition-colors hover:text-text hover:bg-hover-bg"
+      aria-label="Collapse sidebar"
+      className="w-full flex items-center gap-2.5 rounded-md border-0 bg-surface2 cursor-pointer text-left px-2.5 py-1.5 text-text2 hover:bg-hover-bg hover:text-text transition-colors"
     >
-      {collapsed ? ChevronRight : ChevronLeft}
+      <span className="shrink-0 opacity-65">{ChevronLeft}</span>
+      <span className="text-[13px] font-normal">Collapse</span>
     </button>
   );
 }

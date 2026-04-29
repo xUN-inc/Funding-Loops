@@ -4,6 +4,7 @@ import {
 } from '../../ui-kit';
 import NetworkCanvas   from '../components/NetworkCanvas.jsx';
 import VerdictCluster  from '../components/VerdictCluster.jsx';
+import LeakageNote     from '../components/LeakageNote.jsx';
 import { api } from '../lib/api';
 
 export default function LoopDetail({ loopId }) {
@@ -27,6 +28,8 @@ export default function LoopDetail({ loopId }) {
   return (
     <div className="flex flex-col gap-[18px]">
       <IdentificationStrip loop={loop} nodes={nodes} />
+
+      <LeakageNote loop={loop} leakage={leakage} />
 
       <VerdictCluster loop={loop} nodes={nodes} leakage={leakage} />
 

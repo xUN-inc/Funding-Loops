@@ -218,10 +218,10 @@ export default function Loops() {
       </div>
 
       <div
-        className="grid gap-[18px] items-start"
+        className="grid gap-[18px] items-stretch"
         style={{ gridTemplateColumns: '380px 1fr' }}
       >
-        <div className="sticky top-[18px] flex max-h-[calc(100vh-36px)]">
+        <div className="flex sticky top-[18px] self-start max-h-[calc(100vh+150px)] h-[calc(100vh+164px)]">
           <LoopsPanel
             loops={filtered}
             total={loops.length}
