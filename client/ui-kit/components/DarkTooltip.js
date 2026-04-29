@@ -5,15 +5,22 @@ export default function DarkTooltip({ active, payload, label, fmtValue }) {
   const { C } = useTheme();
   if (!active || !payload?.length) return null;
   return (
-    <div style={{
-      background: C.tooltipBg, border: `1px solid ${C.borderLight}`,
-      borderRadius: 8, padding: '8px 12px',
-      boxShadow: C.shadow,
-      pointerEvents: 'none',
-    }}>
-      {label && <p style={{ color: C.text2, fontSize: 11, marginBottom: 4, marginTop: 0 }}>{label}</p>}
+    <div
+      className="bg-tooltip-bg rounded-lg px-3 py-2 pointer-events-none"
+      style={{
+        border: `1px solid ${C.borderLight}`,
+        boxShadow: C.shadow,
+      }}
+    >
+      {label ? (
+        <p className="text-text2 text-[11px] mb-1 mt-0">{label}</p>
+      ) : null}
       {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color ?? C.text, fontSize: 13, fontWeight: 600, margin: '2px 0' }}>
+        <p
+          key={i}
+          className="text-[13px] font-semibold my-0.5"
+          style={{ color: p.color ?? C.text }}
+        >
           {fmtValue ? fmtValue(p.value, p.name, p) : `${p.name}: ${p.value}`}
         </p>
       ))}

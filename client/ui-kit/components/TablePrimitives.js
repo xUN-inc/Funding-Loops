@@ -1,27 +1,27 @@
-import { useTheme } from '../theme';
-
 export function Th({ children, right }) {
-  const { C } = useTheme();
   return (
-    <th style={{
-      padding: '8px 12px', textAlign: right ? 'right' : 'left',
-      fontSize: 10, fontWeight: 700, color: C.text3,
-      textTransform: 'uppercase', letterSpacing: '.07em',
-      borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap',
-      background: C.surface2,
-    }}>{children}</th>
+    <th
+      className={`px-3 py-2 text-[10px] font-bold text-text3 uppercase border-b border-border whitespace-nowrap bg-surface2 ${
+        right ? 'text-right' : 'text-left'
+      }`}
+      style={{ letterSpacing: '.07em' }}
+    >
+      {children}
+    </th>
   );
 }
 
 export function Td({ children, right, mono, muted }) {
-  const { C } = useTheme();
   return (
-    <td style={{
-      padding: '10px 12px', textAlign: right ? 'right' : 'left',
-      color: muted ? C.text2 : C.text,
-      fontFamily: mono ? 'var(--font-geist-mono), monospace' : undefined,
-      fontSize: mono ? 12 : 13,
-      borderBottom: `1px solid ${C.border}`,
-    }}>{children}</td>
+    <td
+      className={[
+        'px-3 py-2.5 border-b border-border',
+        right ? 'text-right' : 'text-left',
+        muted ? 'text-text2' : 'text-text',
+        mono ? 'font-mono text-[12px]' : 'text-[13px]',
+      ].join(' ')}
+    >
+      {children}
+    </td>
   );
 }

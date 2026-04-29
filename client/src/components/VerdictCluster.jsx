@@ -4,10 +4,7 @@ import { computeOrgProfiles } from '../lib/riskProfile';
 
 /**
  * Forensic instrument: per-charity spending fingerprint overlay
- * sharing a frame with the three load-bearing KPIs. Each org gets
- * its own radar series across six dollar-flow axes — comparing
- * shapes shows who behaves like a shell vs who behaves like a
- * working charity.
+ * sharing a frame with the three load-bearing KPIs.
  */
 export default function VerdictCluster({ loop, nodes, leakage }) {
   const { C } = useTheme();
@@ -27,63 +24,53 @@ export default function VerdictCluster({ loop, nodes, leakage }) {
     return next;
   });
 
-  // Hide muted series by passing a transparent color (still in chart for axes)
   const renderSeries = series.map(s => muted.has(s.key)
     ? { ...s, color: 'rgba(0,0,0,0)' }
     : s
   );
 
   return (
-    <div style={{
-      background: C.surface,
-      border: `1px solid ${C.border}`,
-      borderRadius: 10,
-      overflow: 'hidden',
-    }}>
-      <div style={{
-        padding: '11px 18px',
-        background: C.surface2,
-        borderBottom: `1px solid ${C.border}`,
-        display: 'flex', alignItems: 'center', gap: 10,
-      }}>
-        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>Spending Fingerprint</div>
-          <div style={{ fontSize: 10, color: C.text3, marginTop: 1 }}>
+    <div className="bg-surface border border-border rounded-[10px] overflow-hidden">
+      <div className="px-[18px] py-[11px] bg-surface2 border-b border-border flex items-center gap-2.5">
+        <div
+          className="w-[3px] h-[14px] rounded-sm shrink-0"
+          style={{ background: accent }}
+        />
+        <div className="flex-1">
+          <div className="text-[12px] font-semibold text-text">Spending Fingerprint</div>
+          <div className="text-[10px] text-text3 mt-px">
             Per-charity dollar flow · 0–100% · click legend to isolate
           </div>
         </div>
-        <span style={{
-          fontSize: 9, fontWeight: 700, color: accent,
-          textTransform: 'uppercase', letterSpacing: '.12em',
-          fontFamily: 'var(--font-geist-mono), monospace',
-          background: `${accent}15`, padding: '3px 7px', borderRadius: 4,
-          border: `1px solid ${accent}38`,
-        }}>
+        <span
+          className="text-[9px] font-bold uppercase font-mono px-[7px] py-[3px] rounded"
+          style={{
+            color: accent,
+            letterSpacing: '.12em',
+            background: `${accent}15`,
+            border: `1px solid ${accent}38`,
+          }}
+        >
           {loop.worst_classification_label}
         </span>
       </div>
 
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1fr)',
-        gap: 0,
-      }}>
-        <div style={{
-          padding: '14px 4px 6px',
-          borderRight: `1px solid ${C.border}`,
-          display: 'flex', flexDirection: 'column', gap: 8,
-        }}>
+      <div
+        className="grid"
+        style={{ gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1fr)' }}
+      >
+        <div className="pt-3.5 pb-1.5 px-1 border-r border-border flex flex-col gap-2">
           {data.length ? (
             <RadarSignal data={data} series={renderSeries} height={260} />
           ) : (
-            <div style={{ color: C.text3, fontSize: 12, padding: 24, textAlign: 'center' }}>
+            <div className="text-text3 text-[12px] p-6 text-center">
               No spending data for this loop.
             </div>
           )}
           <OrgLegend series={series} muted={muted} onToggle={toggle} />
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div className="flex flex-col">
           <Metric
             label="Total Flow"
             value={loop.total_flow_fmt}
@@ -113,10 +100,7 @@ export default function VerdictCluster({ loop, nodes, leakage }) {
 function OrgLegend({ series, muted, onToggle }) {
   const { C } = useTheme();
   return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', gap: 6,
-      padding: '0 14px 6px',
-    }}>
+    <div className="flex flex-wrap gap-1.5 px-3.5 pb-1.5">
       {series.map(s => {
         const isMuted = muted.has(s.key);
         return (
@@ -125,24 +109,21 @@ function OrgLegend({ series, muted, onToggle }) {
             type="button"
             onClick={() => onToggle(s.key)}
             title={s.label}
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-[10px] font-mono max-w-[220px]"
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '4px 8px', borderRadius: 4, cursor: 'pointer',
               background: isMuted ? 'transparent' : `${s.color}10`,
               border: `1px solid ${isMuted ? C.border : `${s.color}40`}`,
-              fontSize: 10, color: isMuted ? C.text3 : C.text2,
-              fontFamily: 'var(--font-geist-mono), monospace',
-              maxWidth: 220,
+              color: isMuted ? C.text3 : C.text2,
             }}
           >
-            <span style={{
-              width: 7, height: 7, borderRadius: 2, flexShrink: 0,
-              background: isMuted ? C.text3 : s.color,
-              opacity: isMuted ? 0.4 : 1,
-            }} />
-            <span style={{
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{shorten(s.label, 24)}</span>
+            <span
+              className="w-[7px] h-[7px] rounded-sm shrink-0"
+              style={{
+                background: isMuted ? C.text3 : s.color,
+                opacity: isMuted ? 0.4 : 1,
+              }}
+            />
+            <span className="truncate">{shorten(s.label, 24)}</span>
           </button>
         );
       })}
@@ -151,34 +132,32 @@ function OrgLegend({ series, muted, onToggle }) {
 }
 
 function Metric({ label, value, sub, accent }) {
-  const { C } = useTheme();
   return (
-    <div style={{
-      flex: 1, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 4,
-      borderLeft: `2px solid ${accent}`,
-    }}>
-      <span style={{
-        fontSize: 9, fontWeight: 700, color: C.text3,
-        textTransform: 'uppercase', letterSpacing: '.12em',
-        fontFamily: 'var(--font-geist-mono), monospace',
-      }}>{label}</span>
-      <span style={{
-        fontSize: 22, fontWeight: 700, color: C.text,
-        letterSpacing: '-.02em', lineHeight: 1.1,
-        fontFamily: 'var(--font-geist-mono), monospace',
-      }}>{value}</span>
+    <div
+      className="flex-1 px-[18px] py-3.5 flex flex-col gap-1"
+      style={{ borderLeft: `2px solid ${accent}` }}
+    >
+      <span
+        className="text-[9px] font-bold text-text3 uppercase font-mono"
+        style={{ letterSpacing: '.12em' }}
+      >
+        {label}
+      </span>
+      <span
+        className="text-[22px] font-bold text-text font-mono leading-tight"
+        style={{ letterSpacing: '-.02em' }}
+      >
+        {value}
+      </span>
       {sub ? (
-        <span style={{ fontSize: 10, color: C.text3, fontFamily: 'var(--font-geist-mono), monospace' }}>
-          {sub}
-        </span>
+        <span className="text-[10px] text-text3 font-mono">{sub}</span>
       ) : null}
     </div>
   );
 }
 
 function Divider() {
-  const { C } = useTheme();
-  return <div style={{ height: 1, background: C.border }} />;
+  return <div className="h-px bg-border" />;
 }
 
 function shorten(s, n) {

@@ -1,11 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   SectionCard, Badge, SearchBar, filterRows,
-  LoadingState, ErrorState, EmptyState, useTheme,
+  LoadingState, ErrorState, EmptyState, useTheme, Icons,
 } from '../../ui-kit';
 import { api } from '../lib/api';
 import LoopDetail from './LoopDetail.jsx';
 import SlideOver  from '../components/SlideOver.jsx';
+import FetchSettings, { DEFAULT_FETCH_SETTINGS } from '../components/FetchSettings.jsx';
+
+const SETTINGS_KEY = 'loops:fetch-settings:v1';
+
+function loadSettings() {
+  if (typeof window === 'undefined') return DEFAULT_FETCH_SETTINGS;
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_FETCH_SETTINGS;
+    return { ...DEFAULT_FETCH_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_FETCH_SETTINGS;
+  }
+}
+
+function saveSettings(s) {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {}
+}
 
 const VERDICT_TONE = {
   'RED FLAG':  'red',
@@ -21,22 +39,69 @@ const CLASS_TONE = {
   low_risk:            'green',
 };
 
+function buildLoopParams(settings, { offset = 0, isInitial = true } = {}) {
+  return {
+    limit:           isInitial ? settings.initialFetchSize : settings.pageSize,
+    offset,
+    sort:            settings.sort,
+    dir:             settings.dir,
+    classifications: settings.classifications,
+    minDirectors:    settings.minDirectors,
+  };
+}
+
 export default function Loops() {
   const { C } = useTheme();
-  const [data, setData]   = useState(null);
-  const [verdicts, setV]  = useState({});
-  const [err, setErr]     = useState(null);
-  const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState(null);
-  const [memo, setMemo] = useState(null);
-  const [memoErr, setMemoErr] = useState(null);
-  const [memoOpen, setMemoOpen] = useState(false);
+  const [settings, setSettings]       = useState(loadSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [loops, setLoops]             = useState(null);
+  const [pagination, setPagination]   = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [verdicts, setV]              = useState({});
+  const [err, setErr]                 = useState(null);
+  const [query, setQuery]             = useState('');
+  const [selected, setSelected]       = useState(null);
+  const [memo, setMemo]               = useState(null);
+  const [memoErr, setMemoErr]         = useState(null);
+  const [memoOpen, setMemoOpen]       = useState(false);
 
-  useEffect(() => {
-    api.loops().then(setData).catch(e => setErr(e.message));
+  const reload = useCallback((nextSettings) => {
+    setLoops(null);
+    setPagination(null);
+    setErr(null);
+    api.loops(buildLoopParams(nextSettings, { offset: 0, isInitial: true }))
+      .then((res) => {
+        setLoops(res.loops);
+        setPagination(res.pagination);
+      })
+      .catch((e) => setErr(e.message));
   }, []);
 
-  // Fetch memo whenever a new loop is selected. Pre-load so it's ready instantly.
+  useEffect(() => { reload(settings); }, [reload, settings]);
+
+  const handleApplySettings = (next) => {
+    setSettings(next);
+    saveSettings(next);
+    setSettingsOpen(false);
+    setSelected(null);
+  };
+
+  const handleLoadMore = async () => {
+    if (!pagination?.has_more || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await api.loops(
+        buildLoopParams(settings, { offset: pagination.offset + pagination.limit, isInitial: false }),
+      );
+      setLoops((prev) => [...(prev ?? []), ...res.loops]);
+      setPagination(res.pagination);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
     if (!selected) { setMemo(null); setMemoErr(null); setMemoOpen(false); return; }
     setMemo(null); setMemoErr(null);
@@ -47,7 +112,6 @@ export default function Loops() {
     return () => { cancelled = true; };
   }, [selected]);
 
-  // Poll verdicts every 5s until all filled in.
   useEffect(() => {
     let cancelled = false;
     let timer;
@@ -66,85 +130,105 @@ export default function Loops() {
   }, []);
 
   const filtered = useMemo(() => {
-    if (!data) return [];
-    return filterRows(data.loops, query, ['short_label', 'names']);
-  }, [data, query]);
+    if (!loops) return [];
+    let rows = filterRows(loops, query, ['short_label', 'names']);
+    if (settings.verdicts.length) {
+      const allowed = new Set(settings.verdicts);
+      rows = rows.filter((l) => {
+        const v = verdicts[l.id];
+        return v && allowed.has(v);
+      });
+    }
+    return rows;
+  }, [loops, query, settings.verdicts, verdicts]);
 
   if (err)  return <ErrorState message={err} />;
-  if (!data) return <LoadingState message="Loading loops…" />;
+  if (!loops) return <LoadingState message="Loading loops…" />;
 
   const memoBadgeColor = memo ? VERDICT_TONE[memo.verdict] : 'gray';
 
   return (
     <div>
-      <div style={{
-        marginBottom: 24, paddingBottom: 18,
-        borderBottom: `1px solid ${C.border}`,
-      }}>
-        <div style={{
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16,
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              fontSize: 9, fontWeight: 700, color: C.primary,
-              textTransform: 'uppercase', letterSpacing: '.14em',
-              fontFamily: 'var(--font-geist-mono), monospace',
-              marginBottom: 7, opacity: .9,
-            }}>ANALYSIS</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
-              <div style={{
-                width: 4, height: 22, borderRadius: 2, background: C.primary, flexShrink: 0,
-                boxShadow: `0 0 8px ${C.primary}55`,
-              }} />
-              <h1 style={{
-                fontSize: 21, fontWeight: 700, color: C.text,
-                letterSpacing: '-.02em', margin: 0,
-              }}>Funding Loops</h1>
-              <Badge color="gray">{data.loops.length}</Badge>
+      <div className="mb-6 pb-[18px] border-b border-border">
+        <div className="flex items-end justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div
+              className="text-[9px] font-bold text-primary uppercase font-mono mb-[7px]"
+              style={{ letterSpacing: '.14em', opacity: 0.9 }}
+            >
+              ANALYSIS
             </div>
-            <p style={{ fontSize: 13, color: C.text2, marginLeft: 14, marginTop: 0, marginBottom: 0 }}>
+            <div className="flex items-center gap-2.5 mb-1">
+              <div
+                className="w-1 h-[22px] rounded-sm shrink-0 bg-primary"
+                style={{ boxShadow: `0 0 8px ${C.primary}55` }}
+              />
+              <h1
+                className="text-[21px] font-bold text-text m-0"
+                style={{ letterSpacing: '-.02em' }}
+              >
+                Funding Loops
+              </h1>
+              <Badge color="gray">{loops.length}</Badge>
+            </div>
+            <p className="text-[13px] text-text2 ml-3.5 mt-0 mb-0">
               Circular flows of CRA-registered charity money. Click a loop to inspect the network.
             </p>
           </div>
-          {selected ? (
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => setMemoOpen(true)}
-              style={{
-                flexShrink: 0,
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-                padding: '9px 14px', borderRadius: 8, cursor: 'pointer',
-                background: `${C.purple}18`, color: C.purple,
-                border: `1px solid ${C.purple}40`,
-                fontSize: 12, fontWeight: 700, letterSpacing: '.02em',
-                fontFamily: 'var(--font-geist-mono), monospace',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = `${C.purple}28`; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = `${C.purple}18`; }}
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Fetch settings"
+              title="Fetch settings"
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg cursor-pointer text-[12px] font-bold font-mono uppercase tracking-wider bg-surface2 border border-border text-text2 hover:text-text hover:bg-hover-bg"
             >
-              <span>AI MEMO</span>
-              {memo ? (
-                <Badge color={memoBadgeColor}>{memo.verdict}</Badge>
-              ) : memoErr ? (
-                <Badge color="red">ERR</Badge>
-              ) : (
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: C.warning,
-                  animation: 'pulse-dot 1s ease-in-out infinite',
-                }} />
-              )}
+              <span aria-hidden="true">{Icons.settings}</span>
+              <span>Settings</span>
             </button>
-          ) : null}
+            {selected ? (
+              <button
+                type="button"
+                onClick={() => setMemoOpen(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg cursor-pointer text-[12px] font-bold font-mono"
+                style={{
+                  background: `${C.purple}18`,
+                  color: C.purple,
+                  border: `1px solid ${C.purple}40`,
+                  letterSpacing: '.02em',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = `${C.purple}28`; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = `${C.purple}18`; }}
+              >
+                <span>AI MEMO</span>
+                {memo ? (
+                  <Badge color={memoBadgeColor}>{memo.verdict}</Badge>
+                ) : memoErr ? (
+                  <Badge color="red">ERR</Badge>
+                ) : (
+                  <span
+                    className="w-2 h-2 rounded-full bg-warning"
+                    style={{ animation: 'pulse-dot 1s ease-in-out infinite' }}
+                  />
+                )}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 18, alignItems: 'start' }}>
-        <div style={{ position: 'sticky', top: 18, maxHeight: 'calc(100vh - 36px)', display: 'flex' }}>
+      <div
+        className="grid gap-[18px] items-start"
+        style={{ gridTemplateColumns: '380px 1fr' }}
+      >
+        <div className="sticky top-[18px] flex max-h-[calc(100vh-36px)]">
           <LoopsPanel
-            C={C}
             loops={filtered}
-            total={data.loops.length}
+            total={loops.length}
+            poolTotal={pagination?.total ?? loops.length}
+            hasMore={!!pagination?.has_more}
+            loadingMore={loadingMore}
+            onLoadMore={handleLoadMore}
             query={query}
             onQuery={setQuery}
             verdicts={verdicts}
@@ -177,50 +261,46 @@ export default function Loops() {
           <LoadingState message="Generating memo…" />
         ) : (
           <div>
-            <div style={{ marginBottom: 14 }}>
+            <div className="mb-3.5">
               <Badge color={memoBadgeColor}>VERDICT: {memo.verdict}</Badge>
             </div>
-            <div style={{
-              fontSize: 13, color: C.text, lineHeight: 1.65, whiteSpace: 'pre-wrap',
-            }}>
+            <div
+              className="text-[13px] text-text whitespace-pre-wrap"
+              style={{ lineHeight: 1.65 }}
+            >
               {memo.memo.replace(/\[VERDICT:[^\]]+\]/, '').trim()}
             </div>
           </div>
         )}
       </SlideOver>
+
+      <FetchSettings
+        open={settingsOpen}
+        settings={settings}
+        onApply={handleApplySettings}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   );
 }
 
-function LoopsPanel({ C, loops, total, query, onQuery, verdicts, selected, onSelect }) {
+function LoopsPanel({
+  loops, total, poolTotal, hasMore, loadingMore, onLoadMore,
+  query, onQuery, verdicts, selected, onSelect,
+}) {
   return (
-    <div style={{
-      background: C.surface,
-      border: `1px solid ${C.border}`,
-      borderRadius: 10,
-      overflow: 'hidden',
-      display: 'flex', flexDirection: 'column',
-      alignSelf: 'stretch', minHeight: 0,
-    }}>
-      <div style={{
-        padding: '11px 18px',
-        background: C.surface2,
-        borderBottom: `1px solid ${C.border}`,
-        display: 'flex', alignItems: 'center', gap: 8,
-        flexShrink: 0,
-      }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>Loops</div>
-          <div style={{ fontSize: 10, color: C.text3, marginTop: 1 }}>
+    <div className="bg-surface border border-border rounded-[10px] overflow-hidden flex flex-col self-stretch min-h-0">
+      <div className="px-[18px] py-[11px] bg-surface2 border-b border-border flex items-center gap-2 shrink-0">
+        <div className="flex-1">
+          <div className="text-[12px] font-semibold text-text">Loops</div>
+          <div className="text-[10px] text-text3 mt-px">
             {loops.length} of {total}
+            {poolTotal > total ? <span className="text-text3"> · {poolTotal} available</span> : null}
           </div>
         </div>
       </div>
-      <div style={{
-        padding: 14, display: 'flex', flexDirection: 'column', gap: 12,
-        flex: 1, minHeight: 0,
-      }}>
-        <div style={{ flexShrink: 0 }}>
+      <div className="p-3.5 flex flex-col gap-3 flex-1 min-h-0">
+        <div className="shrink-0">
           <SearchBar
             value={query}
             onChange={onQuery}
@@ -230,13 +310,9 @@ function LoopsPanel({ C, loops, total, query, onQuery, verdicts, selected, onSel
           />
         </div>
         {loops.length === 0 ? (
-          <EmptyState title="No loops match" subtitle="Try a different search." />
+          <EmptyState title="No loops match" subtitle="Try a different search or adjust filters." />
         ) : (
-          <div style={{
-            display: 'flex', flexDirection: 'column', gap: 6,
-            flex: 1, minHeight: 0, overflowY: 'auto',
-            paddingRight: 4,
-          }}>
+          <div className="flex flex-col gap-1.5 flex-1 min-h-0 overflow-y-auto pr-1">
             {loops.map(loop => (
               <LoopRow
                 key={loop.id}
@@ -246,6 +322,16 @@ function LoopsPanel({ C, loops, total, query, onQuery, verdicts, selected, onSel
                 onClick={() => onSelect(loop.id)}
               />
             ))}
+            {hasMore ? (
+              <button
+                type="button"
+                onClick={onLoadMore}
+                disabled={loadingMore}
+                className="mt-1.5 px-3 py-2 rounded-md text-[11px] font-bold font-mono uppercase tracking-wider bg-surface2 border border-border text-text2 hover:text-text hover:bg-hover-bg cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loadingMore ? 'Loading…' : 'Load More'}
+              </button>
+            ) : null}
           </div>
         )}
       </div>
@@ -260,32 +346,24 @@ function LoopRow({ loop, verdict, active, onClick }) {
     <button
       type="button"
       onClick={onClick}
+      className="text-left rounded-lg p-2.5 cursor-pointer flex flex-col gap-1.5 transition-colors"
       style={{
-        textAlign: 'left',
         background: active ? `${C.primary}15` : C.surface2,
         border: `1px solid ${active ? C.primary : C.border}`,
-        borderRadius: 8,
-        padding: 10,
-        cursor: 'pointer',
-        display: 'flex', flexDirection: 'column', gap: 6,
-        transition: 'background .1s, border-color .1s',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-        <span style={{
-          fontFamily: 'var(--font-geist-mono), monospace',
-          fontSize: 13, fontWeight: 700, color: C.text,
-        }}>
+      <div className="flex justify-between gap-2 items-center">
+        <span className="font-mono text-[13px] font-bold text-text">
           {loop.total_flow_fmt}
         </span>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div className="flex gap-1">
           {verdict ? <Badge color={VERDICT_TONE[verdict] ?? 'gray'}>{verdict}</Badge> : <Badge color="gray">…</Badge>}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: C.text2, lineHeight: 1.35 }}>
+      <div className="text-[12px] text-text2 leading-snug">
         {loop.short_label}
       </div>
-      <div style={{ display: 'flex', gap: 6, fontSize: 10, color: C.text3, fontFamily: 'var(--font-geist-mono), monospace' }}>
+      <div className="flex gap-1.5 text-[10px] text-text3 font-mono items-center">
         <span>{loop.hops} hops</span>
         <span>·</span>
         <span>{loop.min_year}–{loop.max_year}</span>

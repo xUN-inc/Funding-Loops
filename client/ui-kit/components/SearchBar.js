@@ -17,16 +17,17 @@ export default function SearchBar({
   const handleInput = useCallback((e) => onChange(e.target.value), [onChange]);
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      background: C.inputBg,
-      border: `1px solid ${focused ? C.primary : C.border}`,
-      borderRadius: 8,
-      padding: '6px 10px',
-      transition: 'border-color .12s, box-shadow .12s',
-      boxShadow: focused ? `0 0 0 3px ${C.primary}22` : 'none',
-    }}>
-      <span style={{ color: focused ? C.primary : C.text3, flexShrink: 0, lineHeight: 0 }}>
+    <div
+      className="flex items-center gap-2 bg-input-bg rounded-lg px-2.5 py-1.5 transition-[border-color,box-shadow] duration-100"
+      style={{
+        border: `1px solid ${focused ? C.primary : C.border}`,
+        boxShadow: focused ? `0 0 0 3px ${C.primary}22` : 'none',
+      }}
+    >
+      <span
+        className="shrink-0 leading-none"
+        style={{ color: focused ? C.primary : C.text3 }}
+      >
         {Icons.search}
       </span>
       <input
@@ -36,20 +37,10 @@ export default function SearchBar({
         onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
-        style={{
-          flex: 1, background: 'transparent', border: 'none', outline: 'none',
-          color: C.text, fontSize: 12,
-          fontFamily: 'var(--font-geist-sans), Inter, system-ui, sans-serif',
-          letterSpacing: '.01em', minWidth: 0,
-        }}
+        className="flex-1 bg-transparent border-0 outline-none text-text text-[12px] tracking-tight min-w-0 font-sans"
       />
       {showCount ? (
-        <span style={{
-          fontSize: 10, fontFamily: 'var(--font-geist-mono), monospace',
-          color: C.text3, flexShrink: 0,
-          background: C.surface2, border: `1px solid ${C.border}`,
-          borderRadius: 4, padding: '1px 6px', fontWeight: 700,
-        }}>
+        <span className="text-[10px] font-mono text-text3 shrink-0 bg-surface2 border border-border rounded px-1.5 py-px font-bold">
           {matched}/{total}
         </span>
       ) : null}
@@ -58,11 +49,7 @@ export default function SearchBar({
           type="button"
           onClick={handleClear}
           aria-label="Clear search"
-          style={{
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            color: C.text3, fontSize: 14, lineHeight: 1, padding: 0,
-            flexShrink: 0,
-          }}
+          className="bg-transparent border-0 cursor-pointer text-text3 text-[14px] leading-none p-0 shrink-0"
         >
           ×
         </button>

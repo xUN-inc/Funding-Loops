@@ -25,14 +25,11 @@ export default function LoopDetail({ loopId }) {
   const hasDirectors = directors?.length > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* Identification strip — terse, mono, low-volume */}
+    <div className="flex flex-col gap-[18px]">
       <IdentificationStrip loop={loop} nodes={nodes} />
 
-      {/* Verdict cluster — radar + KPIs in one frame */}
       <VerdictCluster loop={loop} nodes={nodes} leakage={leakage} />
 
-      {/* Network — full width, prime real estate. This is where investigation happens. */}
       <SectionCard
         title="Flow Network"
         subtitle="Drag nodes · radius scales with revenue · color = government dependency"
@@ -40,12 +37,12 @@ export default function LoopDetail({ loopId }) {
         <NetworkCanvas nodes={nodes} edges={graphEdges} height={Math.min(520, 240 + nodes.length * 40)} />
       </SectionCard>
 
-      {/* Evidence row: leakage waterfall + directors side-by-side */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: hasDirectors ? 'minmax(0, 1.6fr) minmax(0, 1fr)' : '1fr',
-        gap: 18, alignItems: 'start',
-      }}>
+      <div
+        className="grid gap-[18px] items-start"
+        style={{
+          gridTemplateColumns: hasDirectors ? 'minmax(0, 1.6fr) minmax(0, 1fr)' : '1fr',
+        }}
+      >
         <SectionCard
           title="Leakage Waterfall"
           subtitle="One bottleneck dollar moving once around the cycle"
@@ -64,7 +61,6 @@ export default function LoopDetail({ loopId }) {
         ) : null}
       </div>
 
-      {/* Federal grants — only when present, low-priority placement */}
       {hasGrants ? (
         <SectionCard
           title="Federal Grants Touching This Loop"
@@ -79,7 +75,6 @@ export default function LoopDetail({ loopId }) {
 }
 
 function IdentificationStrip({ loop }) {
-  const { C } = useTheme();
   const cells = [
     { label: 'LOOP',  value: `#${loop.id}` },
     { label: 'HOPS',  value: String(loop.hops) },
@@ -87,29 +82,24 @@ function IdentificationStrip({ loop }) {
     { label: 'TIER',  value: String(loop.tier ?? '—').toUpperCase() },
   ];
   return (
-    <div style={{
-      display: 'flex', alignItems: 'stretch',
-      background: C.surface,
-      border: `1px solid ${C.border}`,
-      borderRadius: 8,
-      overflow: 'hidden',
-    }}>
+    <div className="flex items-stretch bg-surface border border-border rounded-lg overflow-hidden">
       {cells.map((c, i) => (
-        <div key={c.label} style={{
-          padding: '10px 16px',
-          borderRight: i < cells.length - 1 ? `1px solid ${C.border}` : 'none',
-          display: 'flex', flexDirection: 'column', gap: 2,
-        }}>
-          <span style={{
-            fontSize: 9, fontWeight: 700, color: C.text3,
-            letterSpacing: '.14em',
-            fontFamily: 'var(--font-geist-mono), monospace',
-          }}>{c.label}</span>
-          <span style={{
-            fontSize: 13, fontWeight: 700, color: C.text,
-            fontFamily: 'var(--font-geist-mono), monospace',
-            letterSpacing: '-.01em',
-          }}>{c.value}</span>
+        <div
+          key={c.label}
+          className={`px-4 py-2.5 flex flex-col gap-0.5 ${i < cells.length - 1 ? 'border-r border-border' : ''}`}
+        >
+          <span
+            className="text-[9px] font-bold text-text3 font-mono"
+            style={{ letterSpacing: '.14em' }}
+          >
+            {c.label}
+          </span>
+          <span
+            className="text-[13px] font-bold text-text font-mono"
+            style={{ letterSpacing: '-.01em' }}
+          >
+            {c.value}
+          </span>
         </div>
       ))}
     </div>
@@ -118,8 +108,8 @@ function IdentificationStrip({ loop }) {
 
 function WaterfallTable({ rows }) {
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse">
         <thead>
           <tr>
             <Th>Org</Th>
@@ -152,25 +142,26 @@ function WaterfallTable({ rows }) {
 }
 
 function DirectorList({ directors }) {
-  const { C } = useTheme();
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="flex flex-col gap-2">
       {directors.map(d => (
-        <div key={d.director_name} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '10px 12px', background: C.surface2, borderRadius: 6,
-          border: `1px solid ${C.border}`, gap: 10,
-        }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{
-              fontSize: 12, fontWeight: 600, color: C.text,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{d.director_name}</div>
-            <div style={{
-              fontSize: 10, color: C.text3, marginTop: 2, lineHeight: 1.4,
-              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}>
+        <div
+          key={d.director_name}
+          className="flex items-center justify-between p-2.5 bg-surface2 border border-border rounded-md gap-2.5"
+        >
+          <div className="min-w-0">
+            <div className="text-[12px] font-semibold text-text truncate">
+              {d.director_name}
+            </div>
+            <div
+              className="text-[10px] text-text3 mt-0.5 overflow-hidden"
+              style={{
+                lineHeight: 1.4,
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
               {d.charity_names.join(' · ')}
             </div>
           </div>
@@ -183,8 +174,8 @@ function DirectorList({ directors }) {
 
 function GrantsTable({ grants }) {
   return (
-    <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <div className="overflow-x-auto overflow-y-auto max-h-[280px]">
+      <table className="w-full border-collapse">
         <thead>
           <tr>
             <Th>Recipient</Th>

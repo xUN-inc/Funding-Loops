@@ -14,7 +14,6 @@ const NAV = [
 ];
 
 export default function App() {
-  const { C } = useTheme();
   const [active, setActive] = useState('loops');
   const [health, setHealth] = useState(null);
 
@@ -35,11 +34,7 @@ export default function App() {
   const memoLoading = health && !health.memo_complete;
 
   return (
-    <div style={{
-      display: 'flex', minHeight: '100vh',
-      background: C.bg, color: C.text,
-      fontFamily: 'Inter, system-ui, sans-serif',
-    }}>
+    <div className="flex min-h-screen bg-bg text-text font-sans">
       <Sidebar
         brand={{ title: 'Follow The Money', subtitle: 'CRA · FED · AB' }}
         items={NAV}
@@ -48,7 +43,7 @@ export default function App() {
         loadingTabs={{ loops: memoLoading }}
         footer={<HealthFooter health={health} />}
       />
-      <main style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
+      <main className="flex-1 px-8 py-7 overflow-y-auto">
         {active === 'loops'    ? <Loops />    : null}
         {active === 'entities' ? <Entities /> : null}
         {active === 'summary'  ? <Summary />  : null}
@@ -58,17 +53,19 @@ export default function App() {
 }
 
 function HealthFooter({ health }) {
-  const { C } = useTheme();
   if (!health) return null;
   const ok = health.status === 'ok';
   return (
-    <div style={{
-      fontSize: 10, fontFamily: 'var(--font-geist-mono), monospace',
-      color: C.text3, lineHeight: 1.6,
-    }}>
-      <div>db <span style={{ color: health.database === 'connected' ? C.success : C.danger }}>{health.database}</span></div>
-      <div>memos <span style={{ color: health.memo_complete ? C.success : C.warning }}>{health.memo_progress}</span></div>
-      <div>status <span style={{ color: ok ? C.success : C.warning }}>{health.status}</span></div>
+    <div className="text-[10px] font-mono text-text3 leading-relaxed">
+      <div>
+        db <span className={health.database === 'connected' ? 'text-success' : 'text-danger'}>{health.database}</span>
+      </div>
+      <div>
+        memos <span className={health.memo_complete ? 'text-success' : 'text-warning'}>{health.memo_progress}</span>
+      </div>
+      <div>
+        status <span className={ok ? 'text-success' : 'text-warning'}>{health.status}</span>
+      </div>
     </div>
   );
 }
