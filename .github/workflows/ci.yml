@@ -7,6 +7,8 @@ on:
     branches: [main]
   # Manual trigger from the Actions tab.
   workflow_dispatch:
+  # Allow other workflows (e.g. deploy.yml) to gate on this one passing.
+  workflow_call:
 
 # Cancel an in-flight run for the same ref when a newer commit lands.
 concurrency:
