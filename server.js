@@ -1,9 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
+const fsp = require('fs/promises');
 const { Pool } = require('pg');
 const { GoogleGenAI } = require('@google/genai');
 const { execSync } = require('child_process');
+const { cacheGet, cacheSet, cacheCount, close: closeCache } = require('./lib/cache');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,6 +71,53 @@ const memoCache = new Map();   // id -> { memo, verdict, loopId, generated_at }
 let cachedLoops = [];          // top 20 loops loaded at startup
 let pregenProgress = { done: 0, total: 0 };
 const startTime = Date.now();
+
+// --- Disk persistence for memoCache ---
+// Memos are expensive to regenerate (Gemini token spend) and rarely change,
+// since they're keyed on loop ID and the underlying matviews refresh nightly
+// at most. Persisting to disk means a deploy/restart doesn't re-pay for the
+// top-N memos that pregen already produced.
+const CACHE_DIR = path.join(__dirname, 'cache');
+const MEMO_CACHE_FILE = path.join(CACHE_DIR, 'memos.json');
+let memoWriteQueue = Promise.resolve();
+
+function loadMemoCacheFromDisk() {
+  try {
+    if (!fs.existsSync(MEMO_CACHE_FILE)) return 0;
+    const raw = fs.readFileSync(MEMO_CACHE_FILE, 'utf8');
+    if (!raw.trim()) return 0;
+    const parsed = JSON.parse(raw);
+    let count = 0;
+    for (const [id, entry] of Object.entries(parsed)) {
+      if (entry && typeof entry.memo === 'string' && entry.verdict) {
+        memoCache.set(id, entry);
+        count++;
+      }
+    }
+    return count;
+  } catch (err) {
+    console.warn(`[memoCache] disk load failed (${err.message}) — starting empty.`);
+    return 0;
+  }
+}
+
+// Atomic write: serialize all writes through a queue, write to a tmp file,
+// then rename. Rename is atomic on POSIX, so a crash mid-write can't leave
+// memos.json half-written.
+function persistMemoCache() {
+  memoWriteQueue = memoWriteQueue.then(async () => {
+    try {
+      await fsp.mkdir(CACHE_DIR, { recursive: true });
+      const snapshot = Object.fromEntries(memoCache);
+      const tmp = MEMO_CACHE_FILE + '.tmp';
+      await fsp.writeFile(tmp, JSON.stringify(snapshot), 'utf8');
+      await fsp.rename(tmp, MEMO_CACHE_FILE);
+    } catch (err) {
+      console.warn('[memoCache] disk write failed:', err.message);
+    }
+  });
+  return memoWriteQueue;
+}
 
 // ============================================================
 // Helper: resolve BN array to charity profiles (most recent year)
@@ -749,6 +799,7 @@ Data: ${JSON.stringify(loopData, null, 2)}`;
 
     const result = { memo: memoText, verdict, loopId: key, generated_at: new Date().toISOString() };
     memoCache.set(key, result);
+    persistMemoCache();
     return result;
   } catch (err) {
     console.error(`Gemini memo failed for loop #${loopId}:`, err.message);
@@ -758,6 +809,7 @@ Data: ${JSON.stringify(loopData, null, 2)}`;
       loopId: key,
       generated_at: new Date().toISOString(),
     };
+    // Don't persist fallbacks — they're transient errors we want to retry next time.
     memoCache.set(key, fallback);
     return fallback;
   }
@@ -1035,11 +1087,27 @@ async function buildLoopDetail(id) {
     };
 }
 
+// Layered lookup: L1 in-process Map -> L2 SQLite (lib/cache) -> L3 Postgres.
+// Both layers share the same TTL so a restart doesn't change freshness
+// semantics. L2 only stores positive results — 404s aren't worth persisting,
+// they're cheap to recompute and rare enough not to matter.
+const LOOP_DETAIL_NS = 'loop_detail';
+
 async function getLoopDetail(id) {
   const key = String(id);
   const now = Date.now();
+
   const hit = loopDetailCache.get(key);
   if (hit && now - hit.at < LOOP_DETAIL_TTL_MS) return hit.payload;
+
+  // L2 check before inflight dedup. SQLite read is sub-ms and synchronous,
+  // so doing it here saves us from kicking off a duplicate build when the
+  // detail is already on disk from a previous process.
+  const l2 = cacheGet(LOOP_DETAIL_NS, key, LOOP_DETAIL_TTL_MS);
+  if (l2) {
+    loopDetailCache.set(key, { payload: l2, at: now });
+    return l2;
+  }
 
   // Dedupe: if another caller is already building the same id, await its promise.
   if (loopDetailInflight.has(key)) return loopDetailInflight.get(key);
@@ -1048,6 +1116,15 @@ async function getLoopDetail(id) {
     try {
       const payload = await buildLoopDetail(id);
       loopDetailCache.set(key, { payload, at: Date.now() });
+      // Only persist real payloads. The 404 sentinel is a Symbol and not
+      // serializable, so guard against it explicitly.
+      if (payload !== LOOP_DETAIL_NOT_FOUND) {
+        try {
+          cacheSet(LOOP_DETAIL_NS, key, payload);
+        } catch (err) {
+          console.warn(`[cache] L2 write failed for loop ${key}:`, err.message);
+        }
+      }
       return payload;
     } finally {
       loopDetailInflight.delete(key);
@@ -1784,6 +1861,9 @@ app.get('/api/health', async (req, res) => {
     golden_records: goldenOk ? 'available' : 'missing',
     memo_progress: `${pregenProgress.done}/${pregenProgress.total}`,
     memo_complete: pregenProgress.total > 0 && pregenProgress.done === pregenProgress.total,
+    l2_cache: {
+      loop_detail_entries: cacheCount(LOOP_DETAIL_NS),
+    },
     uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
   });
 });
@@ -1792,6 +1872,18 @@ app.get('/api/health', async (req, res) => {
 // Startup sequence
 // ============================================================
 async function startup() {
+  // Step 0: Rehydrate memoCache from disk so a restart doesn't re-pay
+  // Gemini for memos we've already generated. Runs before app.listen()
+  // so /api/verdicts can serve cached entries immediately.
+  const restored = loadMemoCacheFromDisk();
+  if (restored > 0) {
+    console.log(`[memoCache] rehydrated ${restored} memo(s) from disk.`);
+  }
+  const l2DetailCount = cacheCount(LOOP_DETAIL_NS);
+  if (l2DetailCount > 0) {
+    console.log(`[cache] ${l2DetailCount} loop_detail entr${l2DetailCount === 1 ? 'y' : 'ies'} available in L2 (SQLite).`);
+  }
+
   // Step 1: Test database connection
   console.log('Testing database connection...');
   try {
@@ -1816,7 +1908,10 @@ async function startup() {
 
   cachedLoops = loops.filter(l => !isFederatedTransfer(parseBNs(l.path_display))).slice(0, 20);
   pregenProgress.total = cachedLoops.length;
-  console.log(`${cachedLoops.length} loops loaded.`);
+  // Reflect any memos already restored from disk so /api/health reports
+  // accurate progress and the UI doesn't show 0/20 while pregen no-ops.
+  pregenProgress.done = cachedLoops.filter(l => memoCache.has(String(l.id))).length;
+  console.log(`${cachedLoops.length} loops loaded. ${pregenProgress.done} memos already cached.`);
 
   // Step 3: Start Express server FIRST so frontend can connect immediately.
   // Memo pregen runs in background; UI shows progress via /api/health.
@@ -1834,10 +1929,14 @@ async function startup() {
 
   // Step 5: Pre-generate memo #1 (top loop) before kicking off rest
   if (cachedLoops.length > 0) {
+    const topId = String(cachedLoops[0].id);
+    const wasCached = memoCache.has(topId);
     console.log('Pre-generating memo 1/' + cachedLoops.length + ' (top loop)...');
     await generateMemo(cachedLoops[0].id);
-    pregenProgress.done = 1;
-    console.log(`Memo 1 ready — verdict: ${memoCache.get(String(cachedLoops[0].id))?.verdict}`);
+    // Only bump the counter if this run actually produced the memo.
+    // If it was rehydrated from disk, we already counted it above.
+    if (!wasCached) pregenProgress.done++;
+    console.log(`Memo 1 ready — verdict: ${memoCache.get(topId)?.verdict}`);
   }
 
   // Step 6: Pre-generate memos 2-20 asynchronously (max 10 concurrent — Gemini
@@ -1878,9 +1977,11 @@ async function preGenerateRemaining(loops) {
       const i = idx++;
       const loop = loops[i];
       const num = i + 2; // +2 because #1 is already done
+      const key = String(loop.id);
+      const wasCached = memoCache.has(key);
       console.log(`Pre-generating memo ${num}/${cachedLoops.length}...`);
       await generateMemo(loop.id);
-      pregenProgress.done++;
+      if (!wasCached) pregenProgress.done++;
     }
   }
 
@@ -1918,3 +2019,29 @@ startup().catch(err => {
   console.error('Startup failed:', err);
   process.exit(1);
 });
+
+// On graceful shutdown, drain any pending memoCache writes so we don't lose
+// the most recent memo to a half-written file. Per-write persistence already
+// keeps the on-disk file fresh; this just waits for the queue to flush.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[${signal}] flushing memoCache to disk...`);
+  try {
+    await persistMemoCache();
+    await memoWriteQueue;
+  } catch (err) {
+    console.warn('shutdown flush failed:', err.message);
+  }
+  // Closing the SQLite handle checkpoints the WAL into the main db file
+  // so there's no recovery work on next start.
+  try {
+    closeCache();
+  } catch (err) {
+    console.warn('cache close failed:', err.message);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
