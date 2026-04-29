@@ -2010,14 +2010,12 @@ Write for a non-technical audience investigating Canadian government accountabil
 // GET /api/health — System health (db + matview + memo + golden)
 // ============================================================
 app.get('/api/health', async (req, res) => {
-  let dbOk = false;
-  try {
-    await pool.query('SELECT 1');
-    dbOk = true;
-  } catch { }
-
-  const classOk = await probeClassificationView();
-  const goldenOk = await probeGoldenView();
+  const dbCheck = pool.query('SELECT 1').then(() => true).catch(() => false);
+  const [dbOk, classOk, goldenOk] = await Promise.all([
+    dbCheck,
+    probeClassificationView(),
+    probeGoldenView(),
+  ]);
 
   const allHealthy = dbOk && classOk;
   res.status(allHealthy ? 200 : 503).json({
@@ -2059,6 +2057,15 @@ async function startup() {
     console.error('DATABASE CONNECTION FAILED:', err.message);
     process.exit(1);
   }
+
+  // Warm schema-availability probes in parallel so the first request
+  // doesn't pay 50–200ms of cold probe latency. Results are memoized
+  // inside each probe via module-scoped flags.
+  await Promise.all([
+    probeClassificationView(),
+    probeGoldenView(),
+    probeAB(),
+  ]);
 
   // Step 2: Load top 20 loops into memory
   console.log('Loading top 20 loops...');
