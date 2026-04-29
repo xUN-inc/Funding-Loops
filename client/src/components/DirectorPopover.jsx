@@ -10,10 +10,41 @@ const CLASS_TONE = {
   low_risk:            'green',
 };
 
-const POPOVER_WIDTH = 420;
-// Cap height at width so popover stays square; body scrolls past that.
-const POPOVER_MAX_HEIGHT = POPOVER_WIDTH;
+const POPOVER_WIDTH = 460;
+// Body scrolls — taller cap to fit the structured boards plus the AI profile.
+const POPOVER_MAX_HEIGHT = 600;
 const VIEWPORT_PAD = 12;
+
+const PROFILE_TONE = {
+  COMPLETE: 'green',
+  PARTIAL: 'yellow',
+  AMBIGUOUS: 'red',
+};
+
+// Parse the AI profile string returned by /api/director-profile into
+// structured bullets the UI can render. Each input line looks like:
+//   "- [CATEGORY] claim text | Source: https://..."
+// Trailing tag "[PROFILE: COMPLETE]" becomes the status badge.
+function parseProfile(text) {
+  if (!text) return { bullets: [], status: null };
+  const statusMatch = text.match(/\[PROFILE:\s*([^\]]+)\]/);
+  const status = statusMatch ? statusMatch[1].trim() : null;
+  const bullets = text
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('-'))
+    .map(line => {
+      const stripped = line.replace(/^-\s*/, '');
+      const sourceIdx = stripped.search(/\s*\|\s*Source:\s*/i);
+      const body = sourceIdx >= 0 ? stripped.slice(0, sourceIdx) : stripped;
+      const source = sourceIdx >= 0 ? stripped.slice(sourceIdx).replace(/^\s*\|\s*Source:\s*/i, '').trim() : '';
+      const m = body.match(/^\[([^\]]+)\]\s*(.*)$/);
+      return m
+        ? { category: m[1].trim(), text: m[2].trim(), source }
+        : { category: '', text: body.trim(), source };
+    });
+  return { bullets, status };
+}
 
 function clampPosition(anchor) {
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
@@ -29,20 +60,29 @@ function clampPosition(anchor) {
   return { left, top };
 }
 
-export default function DirectorPopover({ name, anchor, onClose }) {
+export default function DirectorPopover({ name, charityName, anchor, onClose }) {
   const { C } = useTheme();
   const ref = useRef(null);
   const [data, setData] = useState(null);
   const [err, setErr]   = useState(null);
+  const [profile, setProfile]       = useState(null);
+  const [profileErr, setProfileErr] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setData(null); setErr(null);
+    setProfile(null); setProfileErr(null);
+
     api.director(name)
       .then(d => { if (!cancelled) setData(d); })
       .catch(e => { if (!cancelled) setErr(e.message); });
+
+    api.directorProfile(name, charityName)
+      .then(p => { if (!cancelled) setProfile(p); })
+      .catch(e => { if (!cancelled) setProfileErr(e.message); });
+
     return () => { cancelled = true; };
-  }, [name]);
+  }, [name, charityName]);
 
   useEffect(() => {
     function onDown(e) {
@@ -102,7 +142,7 @@ export default function DirectorPopover({ name, anchor, onClose }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4">
         {err ? (
           <ErrorState message={err} />
         ) : !data ? (
@@ -110,6 +150,11 @@ export default function DirectorPopover({ name, anchor, onClose }) {
         ) : (
           <Body data={data} />
         )}
+
+        <ProfileSection
+          profile={profile}
+          err={profileErr}
+        />
       </div>
 
       <div
@@ -203,4 +248,147 @@ function toTitle(s) {
     .split(/\s+/)
     .map(w => w ? w[0].toUpperCase() + w.slice(1) : w)
     .join(' ');
+}
+
+function ProfileSection({ profile, err }) {
+  const { C } = useTheme();
+
+  // Loading and error states are inline (smaller than the boards block above).
+  if (err) {
+    return (
+      <div
+        className="rounded-md p-3 text-[11px]"
+        style={{
+          background: `${C.danger}10`,
+          border: `1px solid ${C.danger}30`,
+          color: C.danger,
+        }}
+      >
+        AI profile unavailable: {err}
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div
+        className="rounded-md p-3 text-[11px] font-mono text-text3 flex items-center gap-2"
+        style={{
+          background: C.surface2,
+          border: `1px solid ${C.border}`,
+        }}
+      >
+        <span className="inline-block w-2 h-2 rounded-full animate-pulse" style={{ background: C.primary }} />
+        Researching public records…
+      </div>
+    );
+  }
+
+  const { bullets, status } = parseProfile(profile.profile);
+  const sources = profile.sources || [];
+  const statusKey = status ? status.split(/\s|—/)[0].toUpperCase() : null;
+  const tone = statusKey ? PROFILE_TONE[statusKey] || 'gray' : 'gray';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <div
+          className="text-[9px] font-bold font-mono uppercase text-text3"
+          style={{ letterSpacing: '.14em' }}
+        >
+          Public-Record Profile
+        </div>
+        {status ? <Badge color={tone}>{status}</Badge> : null}
+      </div>
+
+      {bullets.length ? (
+        <div className="flex flex-col gap-1.5">
+          {bullets.map((b, i) => (
+            <ProfileBullet key={i} bullet={b} />
+          ))}
+        </div>
+      ) : (
+        <div className="text-[11px] text-text3 italic">
+          No public-record signals found.
+        </div>
+      )}
+
+      {sources.length ? (
+        <div className="flex flex-col gap-1 mt-1">
+          <div
+            className="text-[9px] font-bold font-mono uppercase text-text3"
+            style={{ letterSpacing: '.12em' }}
+          >
+            Sources
+          </div>
+          <ul className="flex flex-col gap-0.5">
+            {sources.map((s, i) => (
+              <li key={i} className="text-[10px] truncate">
+                <a
+                  href={s.uri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:underline"
+                  style={{ color: C.primary }}
+                  title={s.uri}
+                >
+                  {s.title || s.uri}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProfileBullet({ bullet }) {
+  const { C } = useTheme();
+  const isUrl = bullet.source && /^https?:\/\//i.test(bullet.source);
+  return (
+    <div
+      className="rounded-md p-2.5 flex flex-col gap-1"
+      style={{
+        background: C.surface2,
+        border: `1px solid ${C.border}`,
+      }}
+    >
+      <div className="flex items-start gap-2">
+        {bullet.category ? (
+          <span
+            className="text-[8px] font-bold font-mono uppercase shrink-0 px-1.5 py-0.5 rounded mt-px"
+            style={{
+              color: C.primary,
+              background: `${C.primary}1A`,
+              border: `1px solid ${C.primary}40`,
+              letterSpacing: '.1em',
+            }}
+          >
+            {bullet.category}
+          </span>
+        ) : null}
+        <span className="text-[12px] text-text leading-snug">
+          {bullet.text}
+        </span>
+      </div>
+      {bullet.source ? (
+        <div className="text-[10px] font-mono text-text3 truncate" title={bullet.source}>
+          {isUrl ? (
+            <a
+              href={bullet.source}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+              style={{ color: C.primary }}
+            >
+              {bullet.source}
+            </a>
+          ) : (
+            <span>Source: {bullet.source}</span>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }

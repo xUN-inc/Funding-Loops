@@ -8,7 +8,7 @@ import DirectorPopover from './DirectorPopover.jsx';
  */
 export default function VerdictCluster({ loop, leakage, directors = [] }) {
   const { C } = useTheme();
-  const [openDir, setOpenDir] = useState(null); // { name, anchor: { x, y } }
+  const [openDir, setOpenDir] = useState(null); // { name, charityName, anchor: { x, y } }
 
   const sev = loop.worst_classification;
   const accent =
@@ -103,7 +103,11 @@ export default function VerdictCluster({ loop, leakage, directors = [] }) {
                 <DirectorRow
                   key={d.director_name}
                   director={d}
-                  onOpen={(anchor) => setOpenDir({ name: d.director_name, anchor })}
+                  onOpen={(anchor) => setOpenDir({
+                    name: d.director_name,
+                    charityName: d.charity_names?.[0] || null,
+                    anchor,
+                  })}
                 />
               ))}
             </div>
@@ -118,6 +122,7 @@ export default function VerdictCluster({ loop, leakage, directors = [] }) {
       {openDir ? (
         <DirectorPopover
           name={openDir.name}
+          charityName={openDir.charityName}
           anchor={openDir.anchor}
           onClose={() => setOpenDir(null)}
         />
