@@ -1164,6 +1164,13 @@ app.get('/api/director/:name', async (req, res) => {
     const norm = (req.params.name || '').toUpperCase().trim();
     if (!norm) return res.status(400).json({ error: 'name required' });
 
+    // Payload that will be forwarded to Gemini for director enrichment.
+    const geminiPayload = {
+      director_name: norm,
+      requested_at: new Date().toISOString(),
+    };
+    console.log('[director] gemini payload:', JSON.stringify(geminiPayload, null, 2));
+
     const { rows: boards } = await pool.query(`
       WITH recent AS (
         SELECT DISTINCT ON (d.bn)
