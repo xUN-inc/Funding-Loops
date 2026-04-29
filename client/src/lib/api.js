@@ -33,6 +33,7 @@ export const api = {
   health: () => get('/api/health'),
   topRecipients: () => get('/api/recipients/top'),
   recipient: (name) => get(`/api/recipient/${encodeURIComponent(name)}`),
+  director: (name) => get(`/api/director/${encodeURIComponent(name)}`),
   searchRecipient: (q) => get(`/api/recipients/search?q=${encodeURIComponent(q)}`),
   investigate: (id) => post(`/api/investigate/${id}`),
   nlSearch: (query) => postJSON('/api/nl-search', { query }),

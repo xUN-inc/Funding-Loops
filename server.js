@@ -1154,6 +1154,87 @@ async function getLoopDetail(id) {
   return promise;
 }
 
+// ============================================================
+// GET /api/director/:name — full profile for one director.
+// Lists every charity (recent T3010 filings) the named individual
+// sits on, plus revenue context. Used by the director popover.
+// ============================================================
+app.get('/api/director/:name', async (req, res) => {
+  try {
+    const norm = (req.params.name || '').toUpperCase().trim();
+    if (!norm) return res.status(400).json({ error: 'name required' });
+
+    const { rows: boards } = await pool.query(`
+      WITH recent AS (
+        SELECT DISTINCT ON (d.bn)
+          d.bn,
+          d.fpe,
+          UPPER(TRIM(COALESCE(d.first_name, '') || ' ' || COALESCE(d.last_name, ''))) AS director_name
+        FROM cra.cra_directors d
+        WHERE UPPER(TRIM(COALESCE(d.first_name, '') || ' ' || COALESCE(d.last_name, ''))) = $1
+          AND d.fpe >= '2018-01-01'
+        ORDER BY d.bn, d.fpe DESC
+      )
+      SELECT r.bn,
+             r.fpe,
+             p.legal_name,
+             p.city,
+             p.province,
+             p.category_name,
+             o.total_revenue,
+             o.federal_government_revenue,
+             o.provincial_government_revenue,
+             c.classification,
+             c.total_score
+      FROM recent r
+      LEFT JOIN cra.vw_charity_profiles p ON p.bn = r.bn
+      LEFT JOIN cra.overhead_by_charity o ON o.bn = r.bn
+      LEFT JOIN cra.loop_classification c ON c.bn = r.bn
+      ORDER BY COALESCE(o.total_revenue, 0) DESC
+      LIMIT 50
+    `, [norm]);
+
+    if (boards.length === 0) {
+      return res.status(404).json({ error: 'Director not found', director_name: norm });
+    }
+
+    const totalRevenue = boards.reduce((s, b) => s + (Number(b.total_revenue) || 0), 0);
+    const totalGov = boards.reduce(
+      (s, b) => s + (Number(b.federal_government_revenue) || 0) + (Number(b.provincial_government_revenue) || 0),
+      0,
+    );
+    const flagged = boards.filter(b =>
+      b.classification && b.classification !== 'low_risk' && b.classification !== 'structural'
+    ).length;
+
+    res.json({
+      director_name: norm,
+      board_count: boards.length,
+      total_revenue: totalRevenue,
+      total_revenue_fmt: formatCurrency(totalRevenue),
+      total_gov_revenue: totalGov,
+      total_gov_revenue_fmt: formatCurrency(totalGov),
+      flagged_boards: flagged,
+      boards: boards.map(b => ({
+        bn: b.bn,
+        legal_name: b.legal_name || b.bn,
+        city: b.city,
+        province: b.province,
+        category_name: b.category_name,
+        last_filing: b.fpe,
+        total_revenue: Number(b.total_revenue) || 0,
+        total_revenue_fmt: formatCurrency(Number(b.total_revenue) || 0),
+        classification: b.classification,
+        classification_label: b.classification ? CLASSIFICATION_LABEL[b.classification] : null,
+        risk_score: b.total_score != null ? Number(b.total_score) : null,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/director/:name error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/loop/:id', async (req, res) => {
   try {
     const payload = await getLoopDetail(req.params.id);
