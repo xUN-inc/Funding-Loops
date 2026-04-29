@@ -4,10 +4,10 @@ import { api } from '../lib/api';
 
 const CLASS_TONE = {
   overhead_extraction: 'red',
-  receipt_generation:  'red',
-  revenue_inflation:   'yellow',
-  structural:          'gray',
-  low_risk:            'green',
+  receipt_generation: 'red',
+  revenue_inflation: 'yellow',
+  structural: 'gray',
+  low_risk: 'green',
 };
 
 const POPOVER_WIDTH = 420;
@@ -19,7 +19,7 @@ function clampPosition(anchor) {
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
   let left = anchor.x + 8;
-  let top  = anchor.y + 8;
+  let top = anchor.y + 8;
   if (left + POPOVER_WIDTH + VIEWPORT_PAD > vw) {
     left = Math.max(VIEWPORT_PAD, vw - POPOVER_WIDTH - VIEWPORT_PAD);
   }
@@ -33,7 +33,7 @@ export default function DirectorPopover({ name, anchor, onClose }) {
   const { C } = useTheme();
   const ref = useRef(null);
   const [data, setData] = useState(null);
-  const [err, setErr]   = useState(null);
+  const [err, setErr] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,14 +102,16 @@ export default function DirectorPopover({ name, anchor, onClose }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        {err ? (
-          <ErrorState message={err} />
-        ) : !data ? (
-          <LoadingState message="Looking up boards…" />
-        ) : (
-          <Body data={data} />
-        )}
+      <div className="flex-1 overflow-y-auto px-4 py-6 flex flex-col items-center justify-center gap-2 text-center">
+        <div
+          className="text-[10px] font-bold font-mono uppercase"
+          style={{ letterSpacing: '.14em', color: C.warning ?? C.danger }}
+        >
+          API Limit Reached
+        </div>
+        <div className="text-[12px] text-text2 max-w-[300px]">
+          Director profile lookups are temporarily unavailable. Please try again later.
+        </div>
       </div>
 
       <div
@@ -127,7 +129,7 @@ function Body({ data }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-3 gap-2">
-        <Stat label="Boards"  value={String(data.board_count)} />
+        <Stat label="Boards" value={String(data.board_count)} />
         <Stat label="Revenue" value={data.total_revenue_fmt} accent={C.primary} />
         <Stat label="Flagged" value={String(data.flagged_boards)} accent={data.flagged_boards ? C.danger : C.text3} />
       </div>
