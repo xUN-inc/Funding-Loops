@@ -34,6 +34,8 @@ export const api = {
   topRecipients: () => get('/api/recipients/top'),
   recipient: (name) => get(`/api/recipient/${encodeURIComponent(name)}`),
   director: (name) => get(`/api/director/${encodeURIComponent(name)}`),
+  directorProfile: (directorName, charityName) =>
+    postJSON('/api/director-profile', { director_name: directorName, charity_name: charityName }),
   searchRecipient: (q) => get(`/api/recipients/search?q=${encodeURIComponent(q)}`),
   investigate: (id) => post(`/api/investigate/${id}`),
   nlSearch: (query) => postJSON('/api/nl-search', { query }),
