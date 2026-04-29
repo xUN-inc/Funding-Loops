@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
-import { Sidebar, Icons, useTheme } from '../ui-kit';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Sidebar, Icons, useTheme, LoadingState } from '../ui-kit';
 import { api } from './lib/api';
 import Loops from './views/Loops.jsx';
-import Entities from './views/Entities.jsx';
-import Summary from './views/Summary.jsx';
-import NLSearch from './views/NLSearch.jsx';
+
+// Non-default tabs are code-split so the initial bundle (Loops landing)
+// ships without recharts / NL search code paths. Cuts first paint.
+const Entities = lazy(() => import('./views/Entities.jsx'));
+const Summary  = lazy(() => import('./views/Summary.jsx'));
+const NLSearch = lazy(() => import('./views/NLSearch.jsx'));
 
 const NAV = [
   { type: 'section', id: 'analysis', label: 'Analysis' },
@@ -47,10 +50,12 @@ export default function App() {
         footer={<HealthFooter health={health} />}
       />
       <main style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
-        {active === 'loops' ? <Loops /> : null}
-        {active === 'entities' ? <Entities /> : null}
-        {active === 'summary' ? <Summary /> : null}
-        {active === 'nl-search' ? <NLSearch /> : null}
+        <Suspense fallback={<LoadingState message="Loading…" />}>
+          {active === 'loops' ? <Loops /> : null}
+          {active === 'entities' ? <Entities /> : null}
+          {active === 'summary' ? <Summary /> : null}
+          {active === 'nl-search' ? <NLSearch /> : null}
+        </Suspense>
       </main>
     </div>
   );

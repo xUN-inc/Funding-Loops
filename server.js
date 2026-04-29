@@ -1198,16 +1198,28 @@ app.get('/api/verdicts', (req, res) => {
 // GET /api/summary — Aggregate findings across ALL qualifying loops
 // Closes the "narrative report" gap from situation.md.
 // ============================================================
+const SUMMARY_TTL_MS = 5 * 60_000;
 let summaryCache = null;
 let summaryCacheAt = 0;
+let summaryBuilding = null; // dedupe concurrent first-callers
 
-app.get('/api/summary', async (req, res) => {
-  try {
-    // 5-minute cache — this query is heavy
-    if (summaryCache && Date.now() - summaryCacheAt < 5 * 60_000) {
-      return res.json(summaryCache);
+async function getSummary() {
+  if (summaryCache && Date.now() - summaryCacheAt < SUMMARY_TTL_MS) return summaryCache;
+  if (summaryBuilding) return summaryBuilding;
+  summaryBuilding = (async () => {
+    try {
+      const built = await buildSummary();
+      summaryCache = built;
+      summaryCacheAt = Date.now();
+      return built;
+    } finally {
+      summaryBuilding = null;
     }
+  })();
+  return summaryBuilding;
+}
 
+async function buildSummary() {
     const { rows: allLoops } = await pool.query(`
       SELECT id, hops, total_flow, bottleneck_amt, path_display, min_year, max_year, tier
       FROM cra.partitioned_cycles
@@ -1380,8 +1392,12 @@ app.get('/api/summary', async (req, res) => {
       scatter,
     };
 
-    summaryCache = summary;
-    summaryCacheAt = Date.now();
+    return summary;
+}
+
+app.get('/api/summary', async (req, res) => {
+  try {
+    const summary = await getSummary();
     res.json(summary);
   } catch (err) {
     console.error('GET /api/summary error:', err);
@@ -1403,12 +1419,10 @@ app.get('/api/summary/narrative', async (req, res) => {
       return res.json(narrativeCache);
     }
 
-    // Reuse summary cache (or build it)
-    let summary = summaryCache;
-    if (!summary || Date.now() - summaryCacheAt > 5 * 60_000) {
-      const r = await fetch(`http://localhost:${PORT}/api/summary`).then(r => r.json()).catch(() => null);
-      summary = r || summaryCache;
-    }
+    // Reuse summary helper directly — no HTTP self-call. getSummary
+    // dedupes concurrent first-callers, so simultaneous /summary +
+    // /summary/narrative requests share one DB build.
+    const summary = await getSummary();
     if (!summary) return res.status(503).json({ error: 'summary not ready' });
 
     const compact = {
@@ -1582,8 +1596,9 @@ app.get('/api/recipients/top', async (req, res) => {
       return res.json(topRecipientsCache);
     }
 
-    // Federal: aggregate by recipient_legal_name, exclude charity BNs
-    const { rows: fed } = await pool.query(`
+    // Federal aggregation and AB rollup are independent — fire in parallel.
+    // probeAB is memoized + warmed at startup, so this resolves cheaply.
+    const fedQuery = pool.query(`
       SELECT
         UPPER(TRIM(g.recipient_legal_name)) AS norm_name,
         MIN(g.recipient_legal_name)         AS display_name,
@@ -1606,9 +1621,8 @@ app.get('/api/recipients/top', async (req, res) => {
       LIMIT 100
     `);
 
-    // Alberta: aggregate from contracts + sole_source + grants
-    let abMap = {};
-    if (await probeAB()) {
+    const abQuery = (async () => {
+      if (!(await probeAB())) return {};
       try {
         const { rows: ab } = await pool.query(`
           WITH combined AS (
@@ -1628,11 +1642,14 @@ app.get('/api/recipients/top', async (req, res) => {
           FROM combined
           GROUP BY norm_name
         `);
-        abMap = Object.fromEntries(ab.map(r => [r.norm_name, r]));
+        return Object.fromEntries(ab.map(r => [r.norm_name, r]));
       } catch (err) {
         console.warn('AB rollup failed:', err.message);
+        return {};
       }
-    }
+    })();
+
+    const [{ rows: fed }, abMap] = await Promise.all([fedQuery, abQuery]);
 
     // Merge FED + AB, recompute total
     const merged = fed.map(r => {
@@ -1733,8 +1750,9 @@ app.get('/api/recipient/:name', async (req, res) => {
   try {
     const norm = req.params.name.toUpperCase().trim();
 
-    // Federal grants
-    const { rows: fedGrants } = await pool.query(`
+    // Run federal + AB queries in parallel. AB block returns empty arrays
+    // if probe fails; outer Promise.all waits on whichever path is taken.
+    const fedQuery = pool.query(`
       SELECT
         recipient_legal_name,
         recipient_business_number,
@@ -1755,23 +1773,25 @@ app.get('/api/recipient/:name', async (req, res) => {
       LIMIT 50
     `, [norm]);
 
-    let abContracts = [];
-    let abSoleSource = [];
-    let abGrants = [];
-    if (await probeAB()) {
+    const abBundle = (async () => {
+      if (!(await probeAB())) return { contracts: [], sole_source: [], grants: [] };
       try {
         const [c, s, g] = await Promise.all([
           pool.query(`SELECT display_fiscal_year, recipient, amount, ministry FROM ab.ab_contracts WHERE UPPER(TRIM(recipient)) = $1 ORDER BY amount DESC LIMIT 20`, [norm]),
           pool.query(`SELECT ministry, vendor, contract_value, contract_description, contract_date FROM ab.ab_sole_source WHERE UPPER(TRIM(vendor)) = $1 ORDER BY contract_value DESC LIMIT 20`, [norm]),
           pool.query(`SELECT ministry, recipient, amount, program, fiscal_year FROM ab.ab_grants WHERE UPPER(TRIM(recipient)) = $1 ORDER BY amount DESC LIMIT 20`, [norm]),
         ]);
-        abContracts = c.rows;
-        abSoleSource = s.rows;
-        abGrants = g.rows;
+        return { contracts: c.rows, sole_source: s.rows, grants: g.rows };
       } catch (err) {
         console.warn('AB profile lookup failed:', err.message);
+        return { contracts: [], sole_source: [], grants: [] };
       }
-    }
+    })();
+
+    const [{ rows: fedGrants }, ab] = await Promise.all([fedQuery, abBundle]);
+    const abContracts = ab.contracts;
+    const abSoleSource = ab.sole_source;
+    const abGrants = ab.grants;
 
     if (fedGrants.length === 0 && abContracts.length === 0 && abSoleSource.length === 0 && abGrants.length === 0) {
       return res.status(404).json({ error: 'Recipient not found' });
