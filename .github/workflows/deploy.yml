@@ -1,0 +1,62 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger from the Actions tab (handy for re-deploys / rollbacks).
+  workflow_dispatch:
+
+# Never run two deploys at the same time — the second one would race the
+# first's pull/build/restart on the VM.
+concurrency:
+  group: deploy-vm
+  cancel-in-progress: false
+
+jobs:
+  # Reuse CI as a gate. If lint/build fails, deploy is skipped.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      # Optional: set this in Settings → Environments → production → URL.
+      # url: https://your-domain.example.com
+
+    steps:
+      - name: SSH into VM and run deploy script
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
+          port:     ${{ secrets.SSH_PORT || 22 }}
+          # Single command. The script handles pull/install/build/restart.
+          # `set -e` is inside the script; `script_stop: true` makes the
+          # action fail fast if any step inside the SSH session errors.
+          script_stop: true
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            BRANCH=main ./script.sh
+
+      - name: Health check
+        if: success()
+        run: |
+          # Wait up to 60s for /api/health to return ok.
+          BASE="${{ secrets.PUBLIC_URL }}"
+          if [ -z "$BASE" ]; then
+            echo "::notice::PUBLIC_URL not set — skipping health check"
+            exit 0
+          fi
+          for i in $(seq 1 12); do
+            if curl -sf "$BASE/api/health" >/dev/null; then
+              echo "Health check passed on attempt $i"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Health check failed against $BASE/api/health"
+          exit 1
