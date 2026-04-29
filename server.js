@@ -895,7 +895,7 @@ async function getLoopPool() {
         names,
         short_label: shortLabel,
         worst_classification: worst,
-        worst_classification_label: CLASSIFICATION_LABEL[worst] || 'Low Risk',
+        worst_classification_label: CLASSIFICATION_LABEL[worst],
         shared_directors: sharedDirectors,
         has_director_overlap: sharedDirectors > 0,
       };
