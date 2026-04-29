@@ -477,40 +477,6 @@ async function getDirectorOverlap(bns) {
 }
 
 // ============================================================
-// Helper: every charity board this director appears on across
-// the entire CRA dataset (not just the loop the user is viewing).
-// Matches by the same UPPER("first last") form used elsewhere so
-// the input from the UI cards drops in directly.
-// ============================================================
-async function getDirectorBoards(directorName) {
-  const norm = String(directorName || '').trim().toUpperCase();
-  if (!norm) return [];
-  try {
-    const { rows } = await pool.query(`
-      SELECT DISTINCT ON (d.bn)
-        d.bn,
-        d.position,
-        d.start_date,
-        d.end_date,
-        d.at_arms_length,
-        d.fpe,
-        vp.legal_name,
-        vp.city,
-        vp.province,
-        vp.category_name
-      FROM cra.cra_directors d
-      LEFT JOIN cra.vw_charity_profiles vp ON vp.bn = d.bn
-      WHERE UPPER(TRIM(COALESCE(d.first_name, '') || ' ' || COALESCE(d.last_name, ''))) = $1
-      ORDER BY d.bn, d.fpe DESC
-    `, [norm]);
-    return rows;
-  } catch (err) {
-    console.error('getDirectorBoards error:', err.message);
-    return [];
-  }
-}
-
-// ============================================================
 // Helper: golden-records enrichment — cross-dataset context
 // Returns map: bn -> { dataset_sources, aliases, related_count }
 // Tri-state probe so the app degrades gracefully without general schema.
@@ -1223,55 +1189,33 @@ app.post('/api/investigate/:id', async (req, res) => {
 
 // ============================================================
 // Shared logic: build a public-record profile of a charity
-// director by combining everything we know from cra.cra_directors
-// with Google Search-grounded research from Gemini.
+// director using Google Search-grounded research from Gemini.
+// Inputs come straight from the UI card click (director name +
+// charity name). No DB lookups — keeps the endpoint simple and
+// works with whatever the UI already has on screen.
 // ============================================================
-async function generateDirectorProfile({ directorName, charityBn }) {
+async function generateDirectorProfile({ directorName, charityName }) {
   const norm = String(directorName || '').trim().toUpperCase();
   if (!norm) throw new Error('director_name is required');
+  const charity = String(charityName || '').trim();
 
   if (directorCache.has(norm)) {
     return { ...directorCache.get(norm), cached: true };
   }
 
-  // Pull every CRA board this person sits on. The seed BN (where
-  // the user clicked from) is used as conversational anchor in the
-  // prompt; all other boards become "what they're a part of" data.
-  const boards = await getDirectorBoards(norm);
-  const seed = charityBn ? boards.find(b => b.bn === charityBn) : null;
-
-  const boardsBullet = boards.length
-    ? boards
-        .map(b => {
-          const name = b.legal_name || b.bn;
-          const pos = b.position || 'director';
-          const where = [b.city, b.province].filter(Boolean).join(', ');
-          const start = b.start_date ? new Date(b.start_date).toISOString().slice(0, 10) : null;
-          const end = b.end_date ? new Date(b.end_date).toISOString().slice(0, 10) : null;
-          const range = start ? ` (${start}${end ? ` → ${end}` : ' → present'})` : '';
-          const arms = b.at_arms_length === false ? ' [non-arm\'s-length]' : '';
-          return `  - ${name} (BN ${b.bn}) — ${pos}${arms}${where ? `, ${where}` : ''}${range}`;
-        })
-        .join('\n')
-    : '  - (no charity boards found in cra.cra_directors for this exact name)';
-
   const prompt = `You are a research analyst preparing a public-record profile of a Canadian charity director for an accountability investigation. The reader is a journalist or auditor who needs verifiable facts, not speculation.
 
-Director (as listed in CRA T3010 filings): ${norm}
-${seed ? `Profile opened from: ${seed.legal_name || seed.bn} (BN ${seed.bn}) — position: ${seed.position || 'director'}` : ''}
+Director: ${norm}
+${charity ? `Opened from charity: ${charity}` : ''}
 
-CHARITY BOARDS THIS PERSON IS ON (from cra.cra_directors, all years):
-${boardsBullet}
-
-Use Google Search to find publicly available, verifiable information about this person beyond the CRA data above. Restrict to public sources: corporate registries, official announcements, news articles, professional bios, regulatory filings.
+Use Google Search to find publicly available, verifiable information about this person. Restrict to public sources: corporate registries, official announcements, news articles, professional bios, regulatory filings.
 
 OUTPUT FORMAT (strict):
 - Bulleted list, 4-10 bullets total. No prose paragraphs, no preamble, no salutation.
 - Each bullet has THREE parts in this exact form:
-    - [CATEGORY] [12-30 word factual claim] | Source: [URL or "CRA T3010 (cra.cra_directors)"]
+    - [CATEGORY] [12-30 word factual claim] | Source: [URL]
 - CATEGORY is one of: PART OF, ACCESS, OTHER WORK, CONTEXT, AMBIGUITY.
-- Every bullet MUST cite a source. If you cannot find a public source, do not make the claim.
-- For claims sourced from the board list above, cite "CRA T3010 (cra.cra_directors)".
+- Every bullet MUST cite a public source URL. If you cannot find a public source, do not make the claim.
 - If the name is common and you cannot confidently disambiguate, lead with an AMBIGUITY bullet flagging that.
 
 CATEGORY DEFINITIONS:
@@ -1282,10 +1226,10 @@ CATEGORY DEFINITIONS:
 - AMBIGUITY: name-collision warnings or limits of what could be verified.
 
 RULES:
-- Lead with the strongest evidence first (typically PART OF based on the CRA board list).
+- Lead with the strongest evidence first.
 - No speculation, no inference about wrongdoing. State facts only and let the reader judge.
 - Do not duplicate bullets — each bullet should add new information.
-- If almost nothing is publicly findable beyond the CRA data, that's fine — emit fewer bullets and end with [PROFILE: PARTIAL — limited public info].
+- If almost nothing is publicly findable, emit fewer bullets and end with [PROFILE: PARTIAL — limited public info].
 
 End with exactly ONE of these tags on its own line:
 [PROFILE: COMPLETE]
@@ -1318,20 +1262,7 @@ End with exactly ONE of these tags on its own line:
 
   const result = {
     director_name: norm,
-    seed_bn: charityBn || null,
-    seed_charity: seed?.legal_name || null,
-    cra_boards: boards.map(b => ({
-      bn: b.bn,
-      legal_name: b.legal_name,
-      position: b.position,
-      city: b.city,
-      province: b.province,
-      category_name: b.category_name,
-      at_arms_length: b.at_arms_length,
-      start_date: b.start_date,
-      end_date: b.end_date,
-    })),
-    boards_count: boards.length,
+    charity_name: charity || null,
     profile: profileText,
     sources,
     search_queries: groundingQueries,
@@ -1345,18 +1276,18 @@ End with exactly ONE of these tags on its own line:
 
 // ============================================================
 // POST /api/director-profile — AI-grounded director research
-// Body: { director_name: "WALTER BERLIN", charity_bn?: "..." }
-// charity_bn is optional context (where the click came from).
+// Body: { director_name: "WALTER BERLIN", charity_name?: "..." }
+// charity_name is optional context (where the click came from).
 // ============================================================
 app.post('/api/director-profile', async (req, res) => {
   try {
-    const { director_name, charity_bn } = req.body || {};
+    const { director_name, charity_name } = req.body || {};
     if (!director_name) {
       return res.status(400).json({ error: 'director_name is required' });
     }
     const result = await generateDirectorProfile({
       directorName: director_name,
-      charityBn: charity_bn,
+      charityName: charity_name,
     });
     res.json(result);
   } catch (err) {
