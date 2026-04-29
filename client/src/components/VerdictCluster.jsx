@@ -36,17 +36,19 @@ export default function VerdictCluster({ loop, leakage, directors = [] }) {
               Bottleneck flow · leakage · hop span
             </div>
           </div>
-          <span
-            className="text-[9px] font-bold uppercase font-mono px-[7px] py-[3px] rounded"
-            style={{
-              color: accent,
-              letterSpacing: '.12em',
-              background: `${accent}15`,
-              border: `1px solid ${accent}38`,
-            }}
-          >
-            {loop.worst_classification_label}
-          </span>
+          {sev !== 'low_risk' && (
+            <span
+              className="text-[9px] font-bold uppercase font-mono px-[7px] py-[3px] rounded"
+              style={{
+                color: accent,
+                letterSpacing: '.12em',
+                background: `${accent}15`,
+                border: `1px solid ${accent}38`,
+              }}
+            >
+              {loop.worst_classification_label}
+            </span>
+          )}
         </div>
         <div className="px-[18px] py-[11px] flex items-center gap-2.5">
           <div

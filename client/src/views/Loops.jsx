@@ -600,8 +600,12 @@ function LoopRow({ loop, verdict, active, onClick }) {
         <span>{loop.hops} hops</span>
         <span>·</span>
         <span>{loop.min_year}–{loop.max_year}</span>
-        <span>·</span>
-        <Badge color={CLASS_TONE[cls] ?? 'gray'}>{loop.worst_classification_label}</Badge>
+        {cls !== 'low_risk' && (
+          <>
+            <span>·</span>
+            <Badge color={CLASS_TONE[cls] ?? 'gray'}>{loop.worst_classification_label}</Badge>
+          </>
+        )}
       </div>
     </button>
   );
